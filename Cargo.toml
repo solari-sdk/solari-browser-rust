@@ -5,7 +5,8 @@ repository = "https://github.com/solari-sdk/solari-browser-rust"
 edition = "2021"
 rust-version = "1.75"
 description = "Rust binding for the Solari Browser platform control plane (sessions, profiles, replays, managed proxy)."
-license = "Apache-2.0"
+license = "MIT"
+readme = "README.md"
 
 [lib]
 name = "solari_browser"
