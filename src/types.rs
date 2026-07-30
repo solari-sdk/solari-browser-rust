@@ -215,13 +215,14 @@ impl From<ProxyRequest> for ProxySpec {
     }
 }
 
-/// Resolved proxy credentials returned on the session response.
+/// Coarse confirmation of the proxy the gateway resolved for a session.
+///
+/// Carries NO credentials by design: egress is applied server-side (the pool
+/// attaches the upstream to your session), so a caller never dials the proxy
+/// and never needs its address or account.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedProxyConfig {
-    pub server: String,
-    pub username: String,
-    pub password: String,
     pub timezone_id: String,
     pub country: String,
     #[serde(default)]
@@ -405,4 +406,86 @@ where
     D: Deserializer<'de>,
 {
     serde::Deserialize::deserialize(de).map(Some)
+}
+
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod resolved_proxy_tests {
+    use super::*;
+
+    /// REGRESSION GUARD for the shipped fix: the resolved-proxy type carries NO
+    /// credentials.
+    ///
+    /// `ResolvedProxyConfig` used to carry `server`/`username`/`password`. The
+    /// gateway stopped sending them (they disclose the proxy vendor's account),
+    /// so this binding deserialized empty strings forever — a contract that was
+    /// not merely dead but misleading: a caller could read `proxy.server`, get
+    /// `""`, and conclude no proxy was applied.
+    ///
+    /// Rust has no reflection, so the field set is read back out of the derived
+    /// `Debug` output. That is exactly the surface that matters anyway: whatever
+    /// `{:?}` prints is what ends up in somebody's log.
+    fn debug_field_names(dbg: &str) -> Vec<String> {
+        let inner = dbg
+            .split_once('{')
+            .and_then(|(_, rest)| rest.rsplit_once('}'))
+            .map(|(inner, _)| inner)
+            .unwrap_or("");
+        let mut names = Vec::new();
+        let mut depth = 0usize;
+        for part in inner.split(',') {
+            // Only split on top-level commas (Some(..) / nested braces).
+            if depth == 0 {
+                if let Some((name, _)) = part.split_once(':') {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+            depth += part.matches(['(', '{', '[']).count();
+            depth = depth.saturating_sub(part.matches([')', '}', ']']).count());
+        }
+        names
+    }
+
+    #[test]
+    fn resolved_proxy_config_has_exactly_the_confirmation_fields() {
+        let wire = r#"{"timezoneId":"America/Los_Angeles","country":"us","tier":"mobile"}"#;
+        let rp: ResolvedProxyConfig = serde_json::from_str(wire).unwrap();
+
+        let names = debug_field_names(&format!("{rp:?}"));
+        assert_eq!(
+            names,
+            vec!["timezone_id", "country", "tier"],
+            "ResolvedProxyConfig must stay a COARSE CONFIRMATION: egress is applied \
+             server-side, so a caller never dials the proxy and must never receive \
+             its address or account. Got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_credential_keys_are_dropped_not_resurrected() {
+        let wire = r#"{
+            "timezoneId":"America/Los_Angeles",
+            "country":"us",
+            "tier":"mobile",
+            "server":"http://resi.vendor.example:8000",
+            "username":"acct-12345",
+            "password":"hunter2"
+        }"#;
+        let rp: ResolvedProxyConfig = serde_json::from_str(wire).unwrap();
+
+        assert_eq!(rp.timezone_id, "America/Los_Angeles");
+        assert_eq!(rp.country, "us");
+
+        let rendered = format!("{rp:?}");
+        for secret in ["resi.vendor.example", "acct-12345", "hunter2", "server", "username", "password"] {
+            assert!(
+                !rendered.contains(secret),
+                "resolved proxy leaks {secret:?}: {rendered}"
+            );
+        }
+    }
 }
