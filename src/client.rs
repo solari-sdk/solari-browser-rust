@@ -106,11 +106,6 @@ pub struct CreateSessionOptions {
     pub stealth: bool,
     /// Enable managed captcha solving. Requires `stealth`.
     pub captcha: bool,
-    /// Opt in to Cloudflare Web Bot Auth — sign every outbound HTTP request
-    /// with an Ed25519 key registered to our verified bot directory.
-    /// Independent of `stealth`; silently inert if the acquired slot has no
-    /// signing key configured.
-    pub web_bot_auth: bool,
     /// Request managed proxy egress. Requires `stealth`.
     pub proxy: Option<ProxySpec>,
 }
@@ -137,11 +132,6 @@ impl CreateSessionOptions {
 
     pub fn captcha(mut self, on: bool) -> Self {
         self.captcha = on;
-        self
-    }
-
-    pub fn web_bot_auth(mut self, on: bool) -> Self {
-        self.web_bot_auth = on;
         self
     }
 
@@ -218,7 +208,6 @@ impl Sessions<'_> {
             recording: options.recording,
             stealth: options.stealth,
             captcha: options.captcha,
-            web_bot_auth: options.web_bot_auth,
             proxy: options.proxy.clone(),
         };
         let body = serde_json::to_value(&req)

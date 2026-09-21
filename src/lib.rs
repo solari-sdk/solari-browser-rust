@@ -217,7 +217,6 @@ mod tests {
         // Falsy / unset options are omitted entirely.
         assert!(json.get("recording").is_none(), "body: {body}");
         assert!(json.get("captcha").is_none(), "body: {body}");
-        assert!(json.get("webBotAuth").is_none(), "body: {body}");
         assert!(json.get("profileId").is_none(), "body: {body}");
     }
 

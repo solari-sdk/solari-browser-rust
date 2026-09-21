@@ -333,8 +333,6 @@ pub(crate) struct CreateSessionRequest {
     pub stealth: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub captcha: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    pub web_bot_auth: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxySpec>,
 }
