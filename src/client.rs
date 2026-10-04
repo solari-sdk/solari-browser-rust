@@ -330,8 +330,10 @@ impl Sessions<'_> {
         })
     }
 
-    /// Download the session's replay as NDJSON bytes (still `content_encoding`
-    /// encoded — gzip by default).
+    /// Download the session's replay as NDJSON bytes. May or may not
+    /// actually be gzip despite what was uploaded — GCS decompresses
+    /// transparently on an ordinary GET, so check `content_encoding` (now
+    /// provider-accurate) before attempting to decompress.
     pub async fn download_replay(&self, id: &str) -> Result<Vec<u8>, SolariError> {
         let replay = self.replay_url(id).await?;
         let (status, bytes) = self.client.http.get_presigned_bytes(&replay.url).await?;
