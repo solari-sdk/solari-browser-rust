@@ -33,11 +33,16 @@ endpoints verbatim — there is nothing to route through.
 
 ## Install
 
+🚨 **CORRECTED 2026-10-04** — `path = "sdk/rust"` is the in-tree dev-source
+path from the monorepo (`pinetree-browser/sdk/rust`), not an install for
+this published crate. Published on crates.io as `solari-browser` (currently
+0.2.1).
+
 Control plane only (dependency-light — `reqwest`, `serde`, `thiserror`, `url`):
 
 ```toml
 [dependencies]
-solari-browser = { path = "sdk/rust" }
+solari-browser = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -45,8 +50,19 @@ With browser automation (pulls in `chromiumoxide`):
 
 ```toml
 [dependencies]
-solari-browser = { path = "sdk/rust", features = ["connect"] }
+solari-browser = { version = "0.2", features = ["connect"] }
 ```
+
+~~```toml
+[dependencies]
+solari-browser = { path = "sdk/rust" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+With browser automation (pulls in `chromiumoxide`):
+```toml
+[dependencies]
+solari-browser = { path = "sdk/rust", features = ["connect"] }
+```~~
 
 ## Usage
 
