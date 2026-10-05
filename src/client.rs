@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde_json::json;
 use url::Url;
 
-use crate::error::{api_error, SolariError};
+use crate::error::{api_error, SolariError, SolariErrorCode};
 use crate::http::HttpTransport;
 use crate::types::{
     CreateSessionRequest, CreateSessionResponse, Profile, ProfileSaveResponse, ProfileSaveResult,
@@ -297,8 +297,21 @@ impl Sessions<'_> {
             .map_err(|e| SolariError::protocol(format!("Solari: unexpected session view: {e}")))
     }
 
-    /// `DELETE /sessions/:id` — release the session. 404 is tolerated (the
-    /// session already ended).
+    /// `DELETE /sessions/:id` — release the session. A bare 404 is tolerated
+    /// (the session already ended).
+    ///
+    /// A 404 carrying [`SolariErrorCode::InvalidSessionId`] is an error. The
+    /// gateway acks 204 for any authentic session id, including one whose
+    /// session has already ended — the handler is idempotent by design and never
+    /// consults the pool before acking. So a 404 does not mean "already
+    /// released"; it means the gateway refused the id (malformed, forged, or
+    /// another org's) and released nothing, leaving the pool slot held until
+    /// orphan-grace. Treating that as success is what made these releases leak
+    /// slots silently.
+    ///
+    /// A bare 404 with no code stays tolerated — that is a pre-InvalidSessionId
+    /// gateway, where a 404 may legitimately mean the session is already gone.
+    /// Mirrors `releaseRejection` in sdk/src/index.ts.
     ///
     /// Unlike the TS SDK there is no fire-and-forget variant; this is the
     /// equivalent of `releaseAndWait`. Spawn it yourself if you don't want to
@@ -306,10 +319,14 @@ impl Sessions<'_> {
     pub async fn release(&self, id: &str) -> Result<(), SolariError> {
         let path = format!("/sessions/{}", enc(id));
         let res = self.client.http.request("DELETE", &path, None).await?;
-        if !res.ok() && res.status != 404 {
-            return Err(api_error("DELETE", &path, res.status, &res.body));
+        if res.ok() {
+            return Ok(());
         }
-        Ok(())
+        let err = api_error("DELETE", &path, res.status, &res.body);
+        if res.status == 404 && err.code() != Some(&SolariErrorCode::InvalidSessionId) {
+            return Ok(());
+        }
+        Err(err)
     }
 
     /// `GET /sessions/:id/replay-url` — presigned URL for the session's replay.

@@ -174,6 +174,59 @@ mod tests {
     // Tests
     // -----------------------------------------------------------------------
 
+    // A BARE 404 on release means "already gone" and is success. A 404 the
+    // gateway marked InvalidSessionId means it REFUSED the id and released
+    // nothing — the pool slot is still held until orphan-grace, so reporting
+    // success is what made these releases leak slots silently.
+
+    #[tokio::test]
+    async fn release_tolerates_a_bare_404() {
+        let (l, port) = bind_mock().await;
+        let _ = serve(l, vec![(404, r#"{"error":"Not Found"}"#.to_string())]);
+        let client = client_for(port);
+        assert!(client.sessions().release("s_1").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn release_tolerates_a_404_with_an_unrelated_code() {
+        let (l, port) = bind_mock().await;
+        let _ = serve(
+            l,
+            vec![(404, r#"{"error":"Not Found","code":"SomethingElse"}"#.to_string())],
+        );
+        let client = client_for(port);
+        assert!(client.sessions().release("s_1").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn release_fails_on_404_invalid_session_id() {
+        let (l, port) = bind_mock().await;
+        let _ = serve(
+            l,
+            vec![(
+                404,
+                r#"{"error":"Not Found","code":"InvalidSessionId"}"#.to_string(),
+            )],
+        );
+        let client = client_for(port);
+        let err = client
+            .sessions()
+            .release("s_1")
+            .await
+            .expect_err("a refused session id released nothing and must not look like success");
+        assert_eq!(err.status(), Some(404));
+        assert_eq!(err.code(), Some(&SolariErrorCode::InvalidSessionId));
+    }
+
+    #[tokio::test]
+    async fn invalid_session_id_round_trips_through_the_wire_string() {
+        assert_eq!(
+            SolariErrorCode::from("InvalidSessionId"),
+            SolariErrorCode::InvalidSessionId
+        );
+        assert_eq!(SolariErrorCode::InvalidSessionId.as_str(), "InvalidSessionId");
+    }
+
     /// POST /sessions request shape: method/path, auth + content-type headers,
     /// only the truthy options serialized, everything else omitted.
     #[tokio::test]
