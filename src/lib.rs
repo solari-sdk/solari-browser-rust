@@ -345,11 +345,26 @@ mod tests {
             .create(CreateSessionOptions::default())
             .await
             .is_ok());
-        assert_eq!(
-            captured.lock().unwrap().len(),
-            2,
-            "the hint must be honoured on a keyed create"
-        );
+        let reqs = captured.lock().unwrap();
+        assert_eq!(reqs.len(), 2, "the hint must be honoured on a keyed create");
+
+        // The key identifies the CALL, not the attempt: a fresh key per retry
+        // would silently defeat the mechanism (the gateway would see two
+        // distinct keys and create twice) while every assertion above still
+        // passes. Only comparing the two captured headers catches that.
+        fn idempotency_key(head: &str) -> Option<String> {
+            for line in head.lines() {
+                if let Some(v) = line.to_lowercase().strip_prefix("idempotency-key:") {
+                    return Some(v.trim().to_string());
+                }
+            }
+            None
+        }
+        let (head1, _) = split_req(&reqs[0]);
+        let (head2, _) = split_req(&reqs[1]);
+        let key1 = idempotency_key(&head1).expect("first attempt must carry a key");
+        let key2 = idempotency_key(&head2).expect("second attempt must carry a key");
+        assert_eq!(key1, key2, "retries must reuse the SAME key, not mint a fresh one");
     }
 
     /// A key identifies the CALL: two separate creates must not share one.
