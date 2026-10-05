@@ -21,6 +21,10 @@ pub enum SolariErrorCode {
     PlanLimitExceeded,
     /// The acquired browser failed its health check.
     BrowserUnhealthy,
+    /// The gateway refused a session id (malformed, forged, or another org's)
+    /// and acted on nothing. Only meaningful on a 404 — see [`crate::Sessions::release`]
+    /// for why that is not blanket-success.
+    InvalidSessionId,
     /// A code this crate does not know about.
     Other(String),
 }
@@ -30,6 +34,7 @@ impl SolariErrorCode {
     pub const CONCURRENCY_LIMIT_EXCEEDED: &'static str = "ConcurrencyLimitExceeded";
     pub const PLAN_LIMIT_EXCEEDED: &'static str = "PlanLimitExceeded";
     pub const BROWSER_UNHEALTHY: &'static str = "BrowserUnhealthy";
+    pub const INVALID_SESSION_ID: &'static str = "InvalidSessionId";
 
     /// The wire string for this code.
     pub fn as_str(&self) -> &str {
@@ -38,6 +43,7 @@ impl SolariErrorCode {
             SolariErrorCode::ConcurrencyLimitExceeded => Self::CONCURRENCY_LIMIT_EXCEEDED,
             SolariErrorCode::PlanLimitExceeded => Self::PLAN_LIMIT_EXCEEDED,
             SolariErrorCode::BrowserUnhealthy => Self::BROWSER_UNHEALTHY,
+            SolariErrorCode::InvalidSessionId => Self::INVALID_SESSION_ID,
             SolariErrorCode::Other(s) => s,
         }
     }
@@ -50,6 +56,7 @@ impl From<&str> for SolariErrorCode {
             Self::CONCURRENCY_LIMIT_EXCEEDED => SolariErrorCode::ConcurrencyLimitExceeded,
             Self::PLAN_LIMIT_EXCEEDED => SolariErrorCode::PlanLimitExceeded,
             Self::BROWSER_UNHEALTHY => SolariErrorCode::BrowserUnhealthy,
+            Self::INVALID_SESSION_ID => SolariErrorCode::InvalidSessionId,
             other => SolariErrorCode::Other(other.to_string()),
         }
     }
