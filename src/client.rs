@@ -221,7 +221,15 @@ impl Sessions<'_> {
         let res = self
             .client
             .http
-            .request("POST", "/sessions", body.as_ref())
+            .request_with_key(
+                "POST",
+                "/sessions",
+                body.as_ref(),
+                // A create allocates a slot and launches a browser before it can
+                // answer, so a response lost after that point would make a retry
+                // a SECOND session.
+                Some(&crate::http::new_idempotency_key()),
+            )
             .await?;
         if !res.ok() {
             return Err(api_error("POST", "/sessions", res.status, &res.body));

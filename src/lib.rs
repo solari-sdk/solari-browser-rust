@@ -279,6 +279,88 @@ mod tests {
         assert!(p.get("city").is_none());
     }
 
+    /// The gateway marks `404 ReplayPending` retryable: the recording upload is
+    /// still in flight. An idempotent GET must honour that hint even though 404
+    /// is nowhere near the 5xx allowlist.
+    #[tokio::test]
+    async fn retryable_hint_retries_idempotent_get() {
+        let (l, port) = bind_mock().await;
+        let pending =
+            r#"{"error":"replay still uploading","code":"ReplayPending","retryable":true}"#;
+        let ok = r#"{"url":"https://s3/replay.ndjson.gz"}"#;
+        let captured = serve(
+            l,
+            vec![(404, pending.to_string()), (200, ok.to_string())],
+        );
+
+        let client = client_for(port);
+        let link = client.sessions().replay_url("sess-1").await.unwrap();
+
+        assert_eq!(link.url, "https://s3/replay.ndjson.gz");
+        // Two attempts: the hint is what produced the second.
+        assert_eq!(captured.lock().unwrap().len(), 2);
+    }
+
+    /// A 404 WITHOUT the hint is terminal -- the FLAG changes the outcome, not
+    /// the status.
+    #[tokio::test]
+    async fn no_hint_means_no_retry() {
+        let (l, port) = bind_mock().await;
+        let terminal = r#"{"error":"no replay","code":"ReplayUnavailable"}"#;
+        let captured = serve(
+            l,
+            vec![
+                (404, terminal.to_string()),
+                (200, r#"{"url":"never reached"}"#.to_string()),
+            ],
+        );
+
+        let client = client_for(port);
+        assert!(client.sessions().replay_url("sess-1").await.is_err());
+        assert_eq!(captured.lock().unwrap().len(), 1);
+    }
+
+    /// RETRACTED REASON, kept deliberately. This asserted the opposite, because
+    /// "the browser API issues no Idempotency-Key, so a re-sent create could
+    /// leave a second live session behind". Creates now mint a key, so the
+    /// gateway answers the retry from the first result instead of creating
+    /// twice -- the condition was removed, not worked around.
+    ///
+    /// This is the case the gateway-side guard produces: a duplicate arriving
+    /// while the first create is still running is answered 409 + retryable.
+    #[tokio::test]
+    async fn retryable_hint_honoured_on_keyed_create() {
+        let (l, port) = bind_mock().await;
+        let captured = serve(
+            l,
+            vec![
+                (409, r#"{"error":"in progress","retryable":true}"#.to_string()),
+                (201, r#"{"sessionId":"s_ok","wsEndpoint":"wss://x/ws/s_ok"}"#.to_string()),
+            ],
+        );
+
+        let client = client_for(port);
+        assert!(client
+            .sessions()
+            .create(CreateSessionOptions::default())
+            .await
+            .is_ok());
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            2,
+            "the hint must be honoured on a keyed create"
+        );
+    }
+
+    /// A key identifies the CALL: two separate creates must not share one.
+    #[tokio::test]
+    async fn idempotency_keys_differ_between_calls() {
+        assert_ne!(
+            crate::http::new_idempotency_key(),
+            crate::http::new_idempotency_key()
+        );
+    }
+
     /// 503 is retried up to max_attempts and can succeed on the second try.
     #[tokio::test]
     async fn retries_on_503() {
