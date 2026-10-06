@@ -30,14 +30,20 @@
 //!
 //! ## Scope
 //!
-//! This crate is the **control plane plus a `connect()` helper**. There is no
-//! port of the TypeScript `Solari.launch()`, which hands back a live Playwright
-//! `Browser` — Playwright has no Rust binding. To drive a session from Rust,
-//! enable the `connect` feature and attach to [`Session::cdp_endpoint`] with
+//! This crate is the **control plane plus browser attachment**. Playwright has
+//! no Rust binding, so there is no port of the TypeScript `BrowserSession`
+//! Playwright object model; instead, with the `connect` feature enabled you get
+//! two levels of attachment, both driving the session over raw CDP via
 //! [`chromiumoxide`](https://docs.rs/chromiumoxide):
+//! - [`connect`] — attach to a session you already created; and
+//! - [`Client::launch`] — a thin one-call convenience (create, connect, seed an
+//!   attached profile's cookies, health-probe, retry, and release on close)
+//!   that hands back the same [`chromiumoxide::Browser`] to drive.
+//!
+//! Enable it with:
 //!
 //! ```toml
-//! solari-browser = { path = "sdk/rust", features = ["connect"] }
+//! solari-browser = { version = "0.2", features = ["connect"] }
 //! ```
 //!
 //! ## Endpoints vs. the TypeScript SDK
@@ -54,6 +60,9 @@ mod types;
 #[cfg(feature = "connect")]
 mod connect;
 
+#[cfg(feature = "connect")]
+mod session;
+
 pub use client::{Client, ClientOptions, CreateSessionOptions, Profiles, Proxy, Sessions};
 pub use error::{ApiErrorBody, SolariError, SolariErrorCode};
 pub use types::{
@@ -64,6 +73,9 @@ pub use types::{
 
 #[cfg(feature = "connect")]
 pub use connect::{connect, connect_endpoint, ConnectedBrowser};
+
+#[cfg(feature = "connect")]
+pub use session::{LaunchOptions, LaunchedSession};
 
 #[cfg(test)]
 mod tests {

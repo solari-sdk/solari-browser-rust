@@ -142,7 +142,7 @@ impl CreateSessionOptions {
 }
 
 /// Talks the Solari Browser control-plane REST API.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Client {
     http: HttpTransport,
 }

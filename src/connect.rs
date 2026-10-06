@@ -3,12 +3,13 @@
 //! Behind the **`connect`** cargo feature (off by default) so the control-plane
 //! surface stays dependency-light.
 //!
-//! There is no Rust port of `Solari.launch()`: the TypeScript SDK returns a live
-//! *Playwright* `Browser`, and Playwright has no Rust binding. Rust drives the
-//! session over the raw CDP endpoint instead, via [`chromiumoxide`] — which is
-//! why this helper attaches to [`Session::cdp_endpoint`] and not
-//! `Session::ws_endpoint` (the latter speaks the Playwright wire protocol, which
-//! chromiumoxide does not understand).
+//! Playwright has no Rust binding, so there is no port of the TypeScript
+//! `BrowserSession` object model — Rust drives the session over the raw CDP
+//! endpoint via [`chromiumoxide`], which is why this helper attaches to
+//! [`Session::cdp_endpoint`] and not `Session::ws_endpoint` (the latter speaks
+//! the Playwright wire protocol, which chromiumoxide does not understand). For a
+//! one-call create+connect+seed+probe+retry+release convenience on top of this,
+//! see [`crate::Client::launch`].
 
 use chromiumoxide::browser::Browser;
 use chromiumoxide::handler::HandlerConfig;
