@@ -12,15 +12,22 @@ contract as the reference `@solarisdk/browser` TypeScript package
 The crate is `solari-browser`; the root module is `solari_browser`. (Distinct
 from the desktop/sandbox crate, which is `solari-sdk` / `solari`.)
 
-## Scope: no `launch()`, and why
+## Scope: browser attachment, not a Playwright port
 
 The TypeScript SDK's `Solari.launch()` returns a live **Playwright** `Browser`.
-Playwright has no Rust binding, so there is no Rust port of it, and there won't
-be one.
+Playwright has no Rust binding, so there is no port of that object model, and
+there won't be one.
 
 Rust drives sessions over the **raw CDP** endpoint instead, via
-[`chromiumoxide`] — enable the `connect` feature and use
-`solari_browser::connect()`. Note the distinction on every `Session`:
+[`chromiumoxide`], at two levels — both behind the `connect` feature:
+
+- `solari_browser::connect()` — attach to a session you already created.
+- `Client::launch()` — a thin one-call convenience (create, connect, seed an
+  attached profile's cookies, health-probe, retry, release on close) that
+  hands back the same `chromiumoxide::Browser` to drive. Added 2026-10-06 —
+  previously Go/Rust had no equivalent of TS/Python's `launch()` at all.
+
+Note the distinction on every `Session`:
 
 | field          | protocol                  | use from Rust                          |
 | -------------- | ------------------------- | -------------------------------------- |
@@ -115,6 +122,30 @@ println!("{:?}", page.url().await.ok());
 connected.disconnect().await;          // drops the browser, awaits the handler
 client.sessions().release(&session.id).await?;
 ```
+
+### One-call launch (feature `connect`)
+
+Create + connect + seed + probe + retry + release, in one call:
+
+```rust
+use solari_browser::{CreateSessionOptions, LaunchOptions};
+
+let launched = client
+    .launch(LaunchOptions::new(CreateSessionOptions::new().stealth(true)).retries(2))
+    .await?;
+
+let page = launched.browser.new_page("https://example.com").await.unwrap();
+println!("{:?}", page.url().await.ok());
+
+launched.close().await?;   // disconnects and releases the session
+```
+
+An attached profile's **cookies** are seeded into the live browser automatically;
+`localStorage` is not (Playwright restores it for free on the TS/Python path,
+chromiumoxide has no equivalent) — seed it yourself against `launched.browser` if
+you need it. `retries` controls the whole create+connect+probe sequence, not
+individual HTTP requests (that's the `max_attempts` client setting above) — on a
+transient failure the dead session is released and a fresh one created.
 
 ### Profiles
 

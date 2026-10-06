@@ -30,14 +30,20 @@
 //!
 //! ## Scope
 //!
-//! This crate is the **control plane plus a `connect()` helper**. There is no
-//! port of the TypeScript `Solari.launch()`, which hands back a live Playwright
-//! `Browser` — Playwright has no Rust binding. To drive a session from Rust,
-//! enable the `connect` feature and attach to [`Session::cdp_endpoint`] with
+//! This crate is the **control plane plus browser attachment**. Playwright has
+//! no Rust binding, so there is no port of the TypeScript `BrowserSession`
+//! Playwright object model; instead, with the `connect` feature enabled you get
+//! two levels of attachment, both driving the session over raw CDP via
 //! [`chromiumoxide`](https://docs.rs/chromiumoxide):
+//! - [`connect`] — attach to a session you already created; and
+//! - [`Client::launch`] — a thin one-call convenience (create, connect, seed an
+//!   attached profile's cookies, health-probe, retry, and release on close)
+//!   that hands back the same [`chromiumoxide::Browser`] to drive.
+//!
+//! Enable it with:
 //!
 //! ```toml
-//! solari-browser = { path = "sdk/rust", features = ["connect"] }
+//! solari-browser = { version = "0.2", features = ["connect"] }
 //! ```
 //!
 //! ## Endpoints vs. the TypeScript SDK
@@ -54,6 +60,9 @@ mod types;
 #[cfg(feature = "connect")]
 mod connect;
 
+#[cfg(feature = "connect")]
+mod session;
+
 pub use client::{Client, ClientOptions, CreateSessionOptions, Profiles, Proxy, Sessions};
 pub use error::{ApiErrorBody, SolariError, SolariErrorCode};
 pub use types::{
@@ -64,6 +73,9 @@ pub use types::{
 
 #[cfg(feature = "connect")]
 pub use connect::{connect, connect_endpoint, ConnectedBrowser};
+
+#[cfg(feature = "connect")]
+pub use session::{LaunchOptions, LaunchedSession};
 
 #[cfg(test)]
 mod tests {
@@ -953,5 +965,43 @@ mod tests {
             SolariErrorCode::Other("Nope".into()).to_string(),
             "Nope".to_string()
         );
+    }
+
+    // Regression: launch()'s retry loop must retry create() itself on a
+    // transient failure, not only the connect+probe step after it. A bare
+    // `?` on create() short-circuits launch() before opts.retries/is_transient
+    // are ever consulted -- found in review (Feature 3), proved with this
+    // harness before the fix landed.
+    #[cfg(feature = "connect")]
+    #[tokio::test]
+    async fn launch_retries_create_itself_on_transient_exhaustion() {
+        let (l, port) = bind_mock().await;
+        let captured = serve(
+            l,
+            vec![
+                // First create(): exhausts max_attempts(2) on 503 -> Transport
+                // error, which is_transient says yes to.
+                (503, "{}".to_string()),
+                (503, "{}".to_string()),
+                // Second create() (the retry launch() must make): a single
+                // non-transient 400 ends the loop deterministically, so the
+                // request count alone proves the retry fired.
+                (400, r#"{"error":"bad request"}"#.to_string()),
+            ],
+        );
+
+        let client = client_for(port);
+        let result = client
+            .launch(LaunchOptions::new(CreateSessionOptions::default()).retries(1))
+            .await;
+        let Err(err) = result else {
+            panic!("expected second create()'s 400 to end the loop, got Ok");
+        };
+
+        assert_eq!(err.status(), Some(400));
+        // 2 (exhausted first create) + 1 (second create) == 3. If the bare
+        // `?` regression were present, launch() would return on the first
+        // create()'s Transport error and this would be 2.
+        assert_eq!(captured.lock().unwrap().len(), 3);
     }
 }
