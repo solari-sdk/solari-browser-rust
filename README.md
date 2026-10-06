@@ -36,7 +36,7 @@ endpoints verbatim — there is nothing to route through.
 🚨 **CORRECTED 2026-10-04** — `path = "sdk/rust"` is the in-tree dev-source
 path from the monorepo (`pinetree-browser/sdk/rust`), not an install for
 this published crate. Published on crates.io as `solari-browser` (currently
-0.2.1).
+0.2.2).
 
 Control plane only (dependency-light — `reqwest`, `serde`, `thiserror`, `url`):
 
