@@ -161,7 +161,20 @@ impl Client {
         let mut attempt: u32 = 0;
 
         loop {
-            let session = self.sessions().create(opts.create.clone()).await?;
+            let session = match self.sessions().create(opts.create.clone()).await {
+                Ok(session) => session,
+                Err(e) => {
+                    // No session was created -- nothing to release. Create's
+                    // own failure must be retried the same way launch_attempt's
+                    // is, or opts.retries silently does nothing for anyone
+                    // whose create() lands during a transient outage.
+                    if attempt < opts.retries && is_transient(&e) {
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(e);
+                }
+            };
 
             let outcome = self.launch_attempt(&session, want_probe, opts.probe_timeout_ms).await;
             match outcome {

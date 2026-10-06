@@ -966,4 +966,42 @@ mod tests {
             "Nope".to_string()
         );
     }
+
+    // Regression: launch()'s retry loop must retry create() itself on a
+    // transient failure, not only the connect+probe step after it. A bare
+    // `?` on create() short-circuits launch() before opts.retries/is_transient
+    // are ever consulted -- found in review (Feature 3), proved with this
+    // harness before the fix landed.
+    #[cfg(feature = "connect")]
+    #[tokio::test]
+    async fn launch_retries_create_itself_on_transient_exhaustion() {
+        let (l, port) = bind_mock().await;
+        let captured = serve(
+            l,
+            vec![
+                // First create(): exhausts max_attempts(2) on 503 -> Transport
+                // error, which is_transient says yes to.
+                (503, "{}".to_string()),
+                (503, "{}".to_string()),
+                // Second create() (the retry launch() must make): a single
+                // non-transient 400 ends the loop deterministically, so the
+                // request count alone proves the retry fired.
+                (400, r#"{"error":"bad request"}"#.to_string()),
+            ],
+        );
+
+        let client = client_for(port);
+        let result = client
+            .launch(LaunchOptions::new(CreateSessionOptions::default()).retries(1))
+            .await;
+        let Err(err) = result else {
+            panic!("expected second create()'s 400 to end the loop, got Ok");
+        };
+
+        assert_eq!(err.status(), Some(400));
+        // 2 (exhausted first create) + 1 (second create) == 3. If the bare
+        // `?` regression were present, launch() would return on the first
+        // create()'s Transport error and this would be 2.
+        assert_eq!(captured.lock().unwrap().len(), 3);
+    }
 }
