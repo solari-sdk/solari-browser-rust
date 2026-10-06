@@ -57,7 +57,7 @@ With browser automation (pulls in `chromiumoxide`):
 
 ```toml
 [dependencies]
-solari-browser = { version = "0.2", features = ["connect"] }
+solari-browser = { version = "0.3", features = ["connect"] }
 ```
 
 ~~```toml
