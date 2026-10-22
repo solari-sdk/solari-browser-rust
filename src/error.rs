@@ -25,6 +25,9 @@ pub enum SolariErrorCode {
     /// and acted on nothing. Only meaningful on a 404 — see [`crate::Sessions::release`]
     /// for why that is not blanket-success.
     InvalidSessionId,
+    /// `POST /sessions` 503: a proxy tier you explicitly requested cannot be served right now. No session
+    /// was created. The client does not retry it.
+    ProxyTierUnavailable,
     /// A code this crate does not know about.
     Other(String),
 }
@@ -35,6 +38,7 @@ impl SolariErrorCode {
     pub const PLAN_LIMIT_EXCEEDED: &'static str = "PlanLimitExceeded";
     pub const BROWSER_UNHEALTHY: &'static str = "BrowserUnhealthy";
     pub const INVALID_SESSION_ID: &'static str = "InvalidSessionId";
+    pub const PROXY_TIER_UNAVAILABLE: &'static str = "ProxyTierUnavailable";
 
     /// The wire string for this code.
     pub fn as_str(&self) -> &str {
@@ -44,6 +48,7 @@ impl SolariErrorCode {
             SolariErrorCode::PlanLimitExceeded => Self::PLAN_LIMIT_EXCEEDED,
             SolariErrorCode::BrowserUnhealthy => Self::BROWSER_UNHEALTHY,
             SolariErrorCode::InvalidSessionId => Self::INVALID_SESSION_ID,
+            SolariErrorCode::ProxyTierUnavailable => Self::PROXY_TIER_UNAVAILABLE,
             SolariErrorCode::Other(s) => s,
         }
     }
@@ -57,6 +62,7 @@ impl From<&str> for SolariErrorCode {
             Self::PLAN_LIMIT_EXCEEDED => SolariErrorCode::PlanLimitExceeded,
             Self::BROWSER_UNHEALTHY => SolariErrorCode::BrowserUnhealthy,
             Self::INVALID_SESSION_ID => SolariErrorCode::InvalidSessionId,
+            Self::PROXY_TIER_UNAVAILABLE => SolariErrorCode::ProxyTierUnavailable,
             other => SolariErrorCode::Other(other.to_string()),
         }
     }

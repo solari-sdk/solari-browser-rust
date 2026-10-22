@@ -105,6 +105,20 @@ fn says_retryable(body: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// A few 503s are answers, not outages: retrying cannot change them, and the caller needs the code.
+/// `ProxyTierUnavailable` (an explicitly requested proxy tier cannot be served) is one.
+fn is_terminal_503(status: u16, body: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Coded {
+        code: Option<String>,
+    }
+    status == 503
+        && serde_json::from_str::<Coded>(body)
+            .ok()
+            .and_then(|c| c.code)
+            .is_some_and(|c| c == "ProxyTierUnavailable")
+}
+
 #[derive(Clone)]
 pub(crate) struct HttpTransport {
     api_key: String,
@@ -198,7 +212,7 @@ impl HttpTransport {
                     let status = resp.status().as_u16();
                     let body = resp.text().await.unwrap_or_default();
                     // Success, or a status we must not retry: hand it back.
-                    let retry_this = is_retryable_status(status)
+                    let retry_this = (is_retryable_status(status) && !is_terminal_503(status, &body))
                         || (is_safe_to_replay(method, idempotency_key)
                             && says_retryable(&body));
                     if (200..300).contains(&status) || !retry_this {
@@ -263,7 +277,7 @@ impl HttpTransport {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_retryable_status, is_safe_to_replay};
+    use super::{is_retryable_status, is_safe_to_replay, is_terminal_503};
 
     /// 507 is in the allowlist although this gateway emits none (censused
     /// 2026-09-22). Asserted so a "dead code" cleanup reddens a test rather
@@ -278,6 +292,16 @@ mod tests {
         for s in [400u16, 429, 500, 501] {
             assert!(!is_retryable_status(s), "expected {s} NOT retryable");
         }
+    }
+
+    #[test]
+    fn proxy_tier_unavailable_503_is_terminal_but_an_ordinary_503_is_not() {
+        let tier = r#"{"error":"Requested proxy tier 'residential' is unavailable","code":"ProxyTierUnavailable","tier":"residential"}"#;
+        assert!(is_terminal_503(503, tier));
+        assert!(!is_terminal_503(503, r#"{"error":"No stealth pool available","kind":"stealth"}"#));
+        assert!(!is_terminal_503(503, "not json"));
+        // The code only means something on a 503.
+        assert!(!is_terminal_503(502, tier));
     }
 
     #[test]
