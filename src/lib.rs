@@ -63,11 +63,14 @@ mod connect;
 #[cfg(feature = "connect")]
 mod session;
 
-pub use client::{Client, ClientOptions, CreateSessionOptions, Profiles, Proxy, Sessions};
+pub use client::{
+    Client, ClientOptions, CreateSessionOptions, ListSessionsOptions, Profiles, Proxy, Sessions,
+};
 pub use error::{ApiErrorBody, SolariError, SolariErrorCode};
 pub use types::{
     Cookie, LocalStorageEntry, Profile, ProfileSaveResult, ProxyCountries, ProxyRequest, ProxySpec,
-    ProxyTier, ReplayUrl, ResolvedProxyConfig, SameSite, Session, SessionView, SolariRegion,
+    ProxyTier, ReplayUrl, ResolvedProxyConfig, SameSite, Session, SessionList, SessionSummary,
+    SessionView, SolariRegion,
     StorageOrigin, StorageState,
 };
 
@@ -283,6 +286,149 @@ mod tests {
         assert!(json.get("recording").is_none(), "body: {body}");
         assert!(json.get("captcha").is_none(), "body: {body}");
         assert!(json.get("profileId").is_none(), "body: {body}");
+    }
+
+    /// timeoutSeconds, keepAlive and userMetadata go out on create; the metadata comes back on the Session.
+    #[tokio::test]
+    async fn create_session_sends_timeout_keep_alive_and_user_metadata() {
+        let (l, port) = bind_mock().await;
+        let body = r#"{"sessionId":"s_9","wsEndpoint":"wss://gw.example.com/ws/s_9","userMetadata":{"job":"j-7"}}"#;
+        let captured = serve(l, vec![(201, body.to_string())]);
+
+        let mut meta = serde_json::Map::new();
+        meta.insert("job".into(), serde_json::json!("j-7"));
+        let session = client_for(port)
+            .sessions()
+            .create(
+                CreateSessionOptions::new()
+                    .timeout_seconds(120)
+                    .keep_alive(true)
+                    .user_metadata(meta),
+            )
+            .await
+            .unwrap();
+
+        let raw = captured.lock().unwrap()[0].clone();
+        let (_, body) = split_req(&raw);
+        let json: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(json["timeoutSeconds"], 120);
+        assert_eq!(json["keepAlive"], true);
+        assert_eq!(json["userMetadata"]["job"], "j-7");
+        assert_eq!(session.user_metadata.unwrap()["job"], "j-7");
+    }
+
+    /// The new options add nothing to the body when unset: still no body at all.
+    #[tokio::test]
+    async fn new_create_options_are_omitted_when_unset() {
+        let (l, port) = bind_mock().await;
+        let captured = serve(
+            l,
+            vec![(201, r#"{"sessionId":"s_2","wsEndpoint":"wss://gw.example.com/ws/s_2"}"#.to_string())],
+        );
+        client_for(port)
+            .sessions()
+            .create(CreateSessionOptions::default())
+            .await
+            .unwrap();
+        let raw = captured.lock().unwrap()[0].clone();
+        let (_, body) = split_req(&raw);
+        assert!(body.trim().is_empty(), "body: {body}");
+    }
+
+    /// get lifts the gateway's fields out of the response.
+    #[tokio::test]
+    async fn get_returns_the_gateway_view() {
+        let (l, port) = bind_mock().await;
+        let body = r#"{"id":"s_1","status":"active","kind":"stealth","org":"o1","createdAt":"c","expiresAt":"e","userMetadata":{"a":"b"},"wsEndpoint":"wss://gw/ws/s_1","cdpEndpoint":"wss://gw/cdp/s_1"}"#;
+        let _ = serve(l, vec![(200, body.to_string())]);
+        let v = client_for(port).sessions().get("s_1").await.unwrap();
+        assert_eq!(v.id.as_deref(), Some("s_1"));
+        assert_eq!(v.kind.as_deref(), Some("stealth"));
+        assert_eq!(v.org.as_deref(), Some("o1"));
+        assert_eq!(v.user_metadata.unwrap()["a"], "b");
+        assert!(v.cdp_endpoint.is_some() && v.ws_endpoint.is_some());
+    }
+
+    #[tokio::test]
+    async fn list_sends_paging_and_the_metadata_filter_and_parses_the_page() {
+        let (l, port) = bind_mock().await;
+        let body = r#"{"sessions":[{"id":"s1","status":"active","kind":"fast","createdAt":"c","expiresAt":"e","userMetadata":{"team":"x"}},{"id":"s2","status":"released"}],"nextCursor":"cur2"}"#;
+        let captured = serve(l, vec![(200, body.to_string())]);
+
+        let mut opts = ListSessionsOptions::default();
+        opts.limit = Some(2);
+        opts.cursor = Some("cur1".into());
+        opts.metadata.insert("team".into(), "x".into());
+        opts.metadata.insert("env".into(), "prod".into());
+        let page = client_for(port).sessions().list(opts).await.unwrap();
+
+        let raw = captured.lock().unwrap()[0].clone();
+        let (head, _) = split_req(&raw);
+        assert!(head.starts_with("GET /sessions?"), "head: {head}");
+        assert!(head.contains("limit=2"), "head: {head}");
+        assert!(head.contains("cursor=cur1"), "head: {head}");
+        // Pairs are sorted by key and joined by AND.
+        assert!(
+            head.contains("q=user_metadata%5B%27env%27%5D%3A%27prod%27%20AND%20user_metadata%5B%27team%27%5D%3A%27x%27"),
+            "head: {head}"
+        );
+        assert_eq!(page.sessions.len(), 2);
+        assert_eq!(page.sessions[0].id, "s1");
+        assert_eq!(page.sessions[0].user_metadata.as_ref().unwrap()["team"], "x");
+        assert_eq!(page.sessions[1].status, "released");
+        assert_eq!(page.next_cursor.as_deref(), Some("cur2"));
+    }
+
+    #[tokio::test]
+    async fn list_with_default_options_requests_a_bare_path_and_handles_an_empty_page() {
+        let (l, port) = bind_mock().await;
+        let captured = serve(l, vec![(200, r#"{"sessions":[]}"#.to_string())]);
+        let page = client_for(port)
+            .sessions()
+            .list(ListSessionsOptions::default())
+            .await
+            .unwrap();
+        let raw = captured.lock().unwrap()[0].clone();
+        let (head, _) = split_req(&raw);
+        assert!(head.starts_with("GET /sessions HTTP/1.1"), "head: {head}");
+        assert!(page.sessions.is_empty());
+        assert!(page.next_cursor.is_none());
+    }
+
+    /// A filter the gateway grammar cannot express is refused before any request is sent.
+    #[tokio::test]
+    async fn list_refuses_an_unexpressible_filter_without_a_request() {
+        let (l, port) = bind_mock().await;
+        let captured = serve(l, vec![(200, r#"{"sessions":[]}"#.to_string())]);
+        let client = client_for(port);
+
+        for (k, v) in [("k", "it's"), ("k'", "v"), ("", "v")] {
+            let mut opts = ListSessionsOptions::default();
+            opts.metadata.insert(k.into(), v.into());
+            assert!(client.sessions().list(opts).await.is_err(), "{k:?}={v:?}");
+        }
+        let mut many = ListSessionsOptions::default();
+        for i in 0..11 {
+            many.metadata.insert(format!("k{i}"), "v".into());
+        }
+        assert!(client.sessions().list(many).await.is_err());
+        assert!(captured.lock().unwrap().is_empty(), "no request may be sent");
+    }
+
+    /// A gateway 400 on the filter surfaces its code.
+    #[tokio::test]
+    async fn list_surfaces_a_gateway_validation_error() {
+        let (l, port) = bind_mock().await;
+        let _ = serve(
+            l,
+            vec![(400, r#"{"error":"Invalid q","code":"ValidationError","field":"q"}"#.to_string())],
+        );
+        let err = client_for(port)
+            .sessions()
+            .list(ListSessionsOptions::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), Some(400));
     }
 
     /// With no options at all, the body is omitted entirely (not `{}`).
