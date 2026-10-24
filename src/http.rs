@@ -105,18 +105,21 @@ fn says_retryable(body: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// A few 503s are answers, not outages: retrying cannot change them, and the caller needs the code.
-/// `ProxyTierUnavailable` (an explicitly requested proxy tier cannot be served) is one.
-fn is_terminal_503(status: u16, body: &str) -> bool {
+/// Some 5xx are answers, not outages: retrying cannot change them, and the caller needs the code.
+/// The gateway says so itself with `retryable: false` (502 `PoolResponseUnparseable`: the session may
+/// already exist, so a retry creates a second one; 503 `EgressBlockPeekUnsupportedOnFlavor`).
+/// A 503 `ProxyTierUnavailable` (an explicitly requested proxy tier cannot be served) is also terminal,
+/// whatever its flag.
+fn is_terminal(status: u16, body: &str) -> bool {
     #[derive(serde::Deserialize)]
     struct Coded {
         code: Option<String>,
+        retryable: Option<bool>,
     }
-    status == 503
-        && serde_json::from_str::<Coded>(body)
-            .ok()
-            .and_then(|c| c.code)
-            .is_some_and(|c| c == "ProxyTierUnavailable")
+    serde_json::from_str::<Coded>(body).ok().is_some_and(|c| {
+        c.retryable == Some(false)
+            || (status == 503 && c.code.is_some_and(|c| c == "ProxyTierUnavailable"))
+    })
 }
 
 #[derive(Clone)]
@@ -212,7 +215,7 @@ impl HttpTransport {
                     let status = resp.status().as_u16();
                     let body = resp.text().await.unwrap_or_default();
                     // Success, or a status we must not retry: hand it back.
-                    let retry_this = (is_retryable_status(status) && !is_terminal_503(status, &body))
+                    let retry_this = (is_retryable_status(status) && !is_terminal(status, &body))
                         || (is_safe_to_replay(method, idempotency_key)
                             && says_retryable(&body));
                     if (200..300).contains(&status) || !retry_this {
@@ -277,7 +280,7 @@ impl HttpTransport {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_retryable_status, is_safe_to_replay, is_terminal_503};
+    use super::{is_retryable_status, is_safe_to_replay, is_terminal};
 
     /// 507 is in the allowlist although this gateway emits none (censused
     /// 2026-09-22). Asserted so a "dead code" cleanup reddens a test rather
@@ -295,13 +298,18 @@ mod tests {
     }
 
     #[test]
-    fn proxy_tier_unavailable_503_is_terminal_but_an_ordinary_503_is_not() {
+    fn terminal_responses_are_not_retried_but_ordinary_ones_are() {
         let tier = r#"{"error":"Requested proxy tier 'residential' is unavailable","code":"ProxyTierUnavailable","tier":"residential"}"#;
-        assert!(is_terminal_503(503, tier));
-        assert!(!is_terminal_503(503, r#"{"error":"No stealth pool available","kind":"stealth"}"#));
-        assert!(!is_terminal_503(503, "not json"));
+        assert!(is_terminal(503, tier));
+        assert!(!is_terminal(503, r#"{"error":"No stealth pool available","kind":"stealth"}"#));
+        assert!(!is_terminal(503, "not json"));
         // The code only means something on a 503.
-        assert!(!is_terminal_503(502, tier));
+        assert!(!is_terminal(502, tier));
+        // retryable:false ends the loop on any status (502 PoolResponseUnparseable).
+        let unparseable = r#"{"error":"Pool returned an invalid response","code":"PoolResponseUnparseable","retryable":false}"#;
+        assert!(is_terminal(502, unparseable));
+        assert!(!is_terminal(502, r#"{"error":"bad gateway"}"#));
+        assert!(!is_terminal(502, r#"{"retryable":true}"#));
     }
 
     #[test]
