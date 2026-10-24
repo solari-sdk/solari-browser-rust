@@ -466,6 +466,34 @@ mod tests {
         assert_eq!(captured.lock().unwrap().len(), 2);
     }
 
+    /// A 502 PoolResponseUnparseable carries retryable:false (the pool may already have created the
+    /// session): one attempt, and the code reaches the caller.
+    #[tokio::test]
+    async fn pool_response_unparseable_502_is_not_retried() {
+        let (l, port) = bind_mock().await;
+        let ok = r#"{"sessionId":"s_ok","wsEndpoint":"wss://gw.example.com/ws/s_ok"}"#;
+        let captured = serve(
+            l,
+            vec![
+                (
+                    502,
+                    r#"{"error":"Pool returned an invalid response","code":"PoolResponseUnparseable","retryable":false}"#.to_string(),
+                ),
+                (201, ok.to_string()),
+            ],
+        );
+
+        let client = client_for(port);
+        let err = client
+            .sessions()
+            .create(CreateSessionOptions::default())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.status(), Some(502));
+        assert_eq!(captured.lock().unwrap().len(), 1, "retryable:false must not be retried");
+    }
+
     /// Retries are exhausted after max_attempts → a Transport error.
     #[tokio::test]
     async fn retries_exhausted_on_persistent_503() {
