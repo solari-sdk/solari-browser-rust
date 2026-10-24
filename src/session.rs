@@ -40,7 +40,7 @@ use chromiumoxide::cdp::browser_protocol::network::{CookieParam, CookieSameSite,
 use crate::client::Client;
 use crate::client::CreateSessionOptions;
 use crate::connect::{connect, ConnectedBrowser};
-use crate::error::SolariError;
+use crate::error::{SolariError, SolariErrorCode};
 use crate::types::{SameSite, Session, StorageState};
 
 /// Options for [`Client::launch`]. Carries the session-create options plus the
@@ -227,7 +227,10 @@ fn is_transient(e: &SolariError) -> bool {
     matches!(
         e,
         SolariError::Connect { .. } | SolariError::Transport { .. } | SolariError::Protocol { .. }
-    ) || matches!(e, SolariError::Api { status, .. } if *status == 0 || *status >= 500)
+    ) || matches!(e, SolariError::Api { status, code, .. }
+        if (*status == 0 || *status >= 500)
+            // The pool may already have created the session: a fresh create would make a second one.
+            && !matches!(code, Some(SolariErrorCode::Other(c)) if c == "PoolResponseUnparseable"))
 }
 
 /// Open a page, evaluate `1`, and confirm the browser answers within the
@@ -322,6 +325,12 @@ mod tests {
         assert!(!is_transient(&api(400)));
         assert!(!is_transient(&api(404)));
         assert!(!is_transient(&SolariError::Config { message: "x".into() }));
+        // The pool may already have created the session: a fresh create would make a second one.
+        assert!(!is_transient(&SolariError::Api {
+            status: 502,
+            code: Some(SolariErrorCode::Other("PoolResponseUnparseable".into())),
+            message: "x".into(),
+        }));
     }
 
     #[test]

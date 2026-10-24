@@ -218,7 +218,9 @@ impl HttpTransport {
                     let retry_this = (is_retryable_status(status) && !is_terminal(status, &body))
                         || (is_safe_to_replay(method, idempotency_key)
                             && says_retryable(&body));
-                    if (200..300).contains(&status) || !retry_this {
+                    // Out of attempts: hand the last response back so the caller maps its
+                    // status and `code` like any other error, not a status-less Transport.
+                    if (200..300).contains(&status) || !retry_this || attempt == self.max_attempts {
                         return Ok(RawResponse { status, body });
                     }
                     last_err = Some(format!("Solari {method} {path}: {status}"));

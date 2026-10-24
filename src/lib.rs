@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(captured.lock().unwrap().len(), 1, "retryable:false must not be retried");
     }
 
-    /// Retries are exhausted after max_attempts → a Transport error.
+    /// Retries are exhausted after max_attempts → the last response, with its status and code.
     #[tokio::test]
     async fn retries_exhausted_on_persistent_503() {
         let (l, port) = bind_mock().await;
@@ -514,9 +514,49 @@ mod tests {
             .await
             .unwrap_err();
 
+        assert!(matches!(err, SolariError::Api { .. }), "{err:?}");
+        assert_eq!(err.status(), Some(503));
+        assert_eq!(captured.lock().unwrap().len(), 2);
+    }
+
+    /// A 503 with a code that outlasts the retries keeps that code.
+    #[tokio::test]
+    async fn final_5xx_keeps_its_code() {
+        let (l, port) = bind_mock().await;
+        let captured = serve(
+            l,
+            vec![
+                (503, r#"{"error":"unhealthy","code":"BrowserUnhealthy"}"#.to_string()),
+                (503, r#"{"error":"unhealthy","code":"BrowserUnhealthy"}"#.to_string()),
+            ],
+        );
+
+        let client = client_for(port);
+        let err = client
+            .sessions()
+            .create(CreateSessionOptions::default())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.status(), Some(503));
+        assert_eq!(err.code(), Some(&SolariErrorCode::BrowserUnhealthy));
+        assert_eq!(captured.lock().unwrap().len(), 2);
+    }
+
+    /// A transport failure that outlasts the retries is still the exhausted Transport error.
+    #[tokio::test]
+    async fn transport_failure_exhausts_as_transport_error() {
+        let (l, port) = bind_mock().await;
+        drop(l); // nothing listens on this port any more
+        let client = client_for(port);
+        let err = client
+            .sessions()
+            .create(CreateSessionOptions::default())
+            .await
+            .unwrap_err();
+
         assert!(matches!(err, SolariError::Transport { .. }), "{err:?}");
         assert!(err.to_string().contains("exhausted 2 attempts"), "{err}");
-        assert_eq!(captured.lock().unwrap().len(), 2);
     }
 
     /// 400 is NOT retried — it comes straight back on the first attempt.
