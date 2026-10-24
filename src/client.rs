@@ -6,16 +6,18 @@
 //! UPSTREAM `wsEndpoint` / `cdpEndpoint` verbatim — there is no proxy to route
 //! through, and callers connect straight to the gateway.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{json, Map, Value};
 use url::Url;
 
 use crate::error::{api_error, SolariError, SolariErrorCode};
 use crate::http::HttpTransport;
 use crate::types::{
     CreateSessionRequest, CreateSessionResponse, Profile, ProfileSaveResponse, ProfileSaveResult,
-    ProxyCountries, ProxySpec, ReplayUrl, ReplayUrlResponse, Session, SessionView, SolariRegion,
+    ProxyCountries, ProxySpec, ReplayUrl, ReplayUrlResponse, Session, SessionList, SessionView,
+    SolariRegion,
     StorageState,
 };
 
@@ -108,6 +110,15 @@ pub struct CreateSessionOptions {
     pub captcha: bool,
     /// Request managed proxy egress. Requires `stealth`.
     pub proxy: Option<ProxySpec>,
+    /// End the session earlier than the plan maximum. `None` leaves the plan
+    /// maximum; the gateway refuses anything under 60.
+    pub timeout_seconds: Option<u32>,
+    /// Hold the session after the client disconnects, until its deadline
+    /// (`timeout_seconds`, else an hour, never past the plan maximum) or until
+    /// it is released, so a dropped client can reconnect.
+    pub keep_alive: bool,
+    /// Free-form JSON stored with the session and returned by `get` and `list`.
+    pub user_metadata: Option<Map<String, Value>>,
 }
 
 impl CreateSessionOptions {
@@ -139,6 +150,33 @@ impl CreateSessionOptions {
         self.proxy = Some(spec.into());
         self
     }
+
+    pub fn timeout_seconds(mut self, seconds: u32) -> Self {
+        self.timeout_seconds = Some(seconds);
+        self
+    }
+
+    pub fn keep_alive(mut self, on: bool) -> Self {
+        self.keep_alive = on;
+        self
+    }
+
+    pub fn user_metadata(mut self, metadata: Map<String, Value>) -> Self {
+        self.user_metadata = Some(metadata);
+        self
+    }
+}
+
+/// Filters and paging for [`Sessions::list`]. The default lists the first page.
+#[derive(Debug, Clone, Default)]
+pub struct ListSessionsOptions {
+    /// Page size; `None` uses the gateway default.
+    pub limit: Option<u32>,
+    /// Continue from a previous page's `next_cursor`.
+    pub cursor: Option<String>,
+    /// Keep sessions whose `user_metadata` has all these string values (at most
+    /// 10 pairs; keys and values cannot contain a single quote).
+    pub metadata: BTreeMap<String, String>,
 }
 
 /// Talks the Solari Browser control-plane REST API.
@@ -209,6 +247,9 @@ impl Sessions<'_> {
             stealth: options.stealth,
             captcha: options.captcha,
             proxy: options.proxy.clone(),
+            timeout_seconds: options.timeout_seconds,
+            keep_alive: options.keep_alive,
+            user_metadata: options.user_metadata.clone(),
         };
         let body = serde_json::to_value(&req)
             .map_err(|e| SolariError::protocol(format!("Solari: bad create body: {e}")))?;
@@ -268,6 +309,7 @@ impl Sessions<'_> {
             expires_at,
             storage_state: None,
             proxy: data.proxy,
+            user_metadata: data.user_metadata,
         };
 
         // Storage state is only populated when a profile was requested — TS
@@ -295,6 +337,32 @@ impl Sessions<'_> {
         }
         serde_json::from_str(&res.body)
             .map_err(|e| SolariError::protocol(format!("Solari: unexpected session view: {e}")))
+    }
+
+    /// `GET /sessions` — one page of the organisation's sessions. Rows never
+    /// carry the websocket endpoints; call [`Sessions::get`] for those.
+    pub async fn list(&self, options: ListSessionsOptions) -> Result<SessionList, SolariError> {
+        let mut query: Vec<String> = Vec::new();
+        if let Some(limit) = options.limit.filter(|l| *l > 0) {
+            query.push(format!("limit={limit}"));
+        }
+        if let Some(cursor) = options.cursor.as_deref().filter(|c| !c.is_empty()) {
+            query.push(format!("cursor={}", enc(cursor)));
+        }
+        if !options.metadata.is_empty() {
+            query.push(format!("q={}", enc(&metadata_filter(&options.metadata)?)));
+        }
+        let path = if query.is_empty() {
+            "/sessions".to_string()
+        } else {
+            format!("/sessions?{}", query.join("&"))
+        };
+        let res = self.client.http.request("GET", &path, None).await?;
+        if !res.ok() {
+            return Err(api_error("GET", "/sessions", res.status, &res.body));
+        }
+        serde_json::from_str(&res.body)
+            .map_err(|e| SolariError::protocol(format!("Solari: unexpected session list: {e}")))
     }
 
     /// `DELETE /sessions/:id` — release the session. A bare 404 is tolerated
@@ -506,6 +574,30 @@ impl Proxy<'_> {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/// The most key/value pairs the gateway accepts in a list filter.
+const MAX_METADATA_CLAUSES: usize = 10;
+
+/// Render the gateway's list filter grammar: `user_metadata['key']:'value'`
+/// clauses joined by `AND`, in key order. A pair it cannot express is refused
+/// before any request is sent.
+fn metadata_filter(m: &BTreeMap<String, String>) -> Result<String, SolariError> {
+    if m.len() > MAX_METADATA_CLAUSES {
+        return Err(SolariError::config(format!(
+            "Solari: at most {MAX_METADATA_CLAUSES} metadata filter pairs"
+        )));
+    }
+    let mut clauses = Vec::with_capacity(m.len());
+    for (k, v) in m {
+        if k.is_empty() || k.chars().count() > 128 || k.contains('\'') || v.contains('\'') {
+            return Err(SolariError::config(format!(
+                "Solari: metadata filter key {k:?} or its value cannot be expressed (1-128 characters, no single quote)"
+            )));
+        }
+        clauses.push(format!("user_metadata['{k}']:'{v}'"));
+    }
+    Ok(clauses.join(" AND "))
+}
 
 /// Percent-encode a path segment. Session ids are HMAC composites (`.`-joined
 /// base64url) and profile ids are opaque, so only a conservative set of

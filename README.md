@@ -12,6 +12,9 @@ contract as the reference `@solarisdk/browser` TypeScript package
 The crate is `solari-browser`; the root module is `solari_browser`. (Distinct
 from the desktop/sandbox crate, which is `solari-sdk` / `solari`.)
 
+Feature coverage across all five languages is on the
+[SDK feature matrix](https://docs.getsolari.com/sdk-capabilities).
+
 ## Scope: browser attachment, not a Playwright port
 
 The TypeScript SDK's `Solari.launch()` returns a live **Playwright** `Browser`.
@@ -57,7 +60,7 @@ With browser automation (pulls in `chromiumoxide`):
 
 ```toml
 [dependencies]
-solari-browser = { version = "0.3", features = ["connect"] }
+solari-browser = { version = "0.4", features = ["connect"] }
 ```
 
 ~~```toml
@@ -197,6 +200,29 @@ ProxySpec::from(
 Managed proxy requires `stealth(true)`. `client.proxy().countries()` lists the
 supported egress countries and reports whether the gateway has proxy credentials
 configured at all — this endpoint has no TypeScript equivalent.
+
+### Timeout, keep-alive, metadata, get and list
+
+```rust
+let mut meta = serde_json::Map::new();
+meta.insert("job".into(), serde_json::json!("nightly-42"));
+let session = client.sessions().create(
+    CreateSessionOptions::new()
+        .timeout_seconds(600)   // end earlier than the plan maximum (at least 60)
+        .keep_alive(true)       // hold the session if the client drops, until its deadline or release
+        .user_metadata(meta),   // stored with the session
+).await?;
+
+let view = client.sessions().get(&session.id).await?;   // status, kind, user_metadata, endpoints
+let mut opts = ListSessionsOptions::default();
+opts.limit = Some(50);
+opts.metadata.insert("job".into(), "nightly-42".into()); // optional: match user_metadata
+let page = client.sessions().list(opts).await?;          // page.sessions, page.next_cursor
+```
+
+`list` never returns the websocket endpoints (they are bearer capabilities): call
+`get` for a single session's. Pass `page.next_cursor` as `cursor` for the next
+page; it is `None` on the last one.
 
 ### Replays
 

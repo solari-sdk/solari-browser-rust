@@ -264,21 +264,71 @@ pub struct Session {
     pub storage_state: Option<Option<StorageState>>,
     /// Present only when a managed proxy was requested.
     pub proxy: Option<ResolvedProxyConfig>,
+    /// Echo of the `user_metadata` sent at create; `None` when none was sent.
+    pub user_metadata: Option<Map<String, Value>>,
 }
 
-/// `GET /sessions/:id`. The API proxies the pool's view through verbatim, so
-/// every field is optional and unknown keys land in [`SessionView::extra`].
+/// `GET /sessions/:id`. Fields the gateway adds later land in [`SessionView::extra`].
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionView {
+    /// The session id (the same composite id `Sessions::create` returned).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Older pool-proxied payloads used this key instead of `id`.
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+    /// Pool flavour that served the session (`"fast"` or `"stealth"`).
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Owning organisation id.
+    #[serde(default)]
+    pub org: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
     #[serde(default)]
     pub expires_at: Option<String>,
+    /// What was sent as `user_metadata` at create; `None` when none was.
+    #[serde(default)]
+    pub user_metadata: Option<Map<String, Value>>,
+    /// Present while the session is active.
+    #[serde(default)]
+    pub ws_endpoint: Option<String>,
+    #[serde(default)]
+    pub cdp_endpoint: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// One row of [`Sessions::list`](crate::Sessions::list). It never carries the
+/// websocket endpoints (they are bearer capabilities): use `Sessions::get`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSummary {
+    pub id: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub user_metadata: Option<Map<String, Value>>,
+}
+
+/// One page of [`Sessions::list`](crate::Sessions::list).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionList {
+    #[serde(default)]
+    pub sessions: Vec<SessionSummary>,
+    /// `None` on the last page; pass it as `ListSessionsOptions::cursor`.
+    #[serde(default)]
+    pub next_cursor: Option<String>,
 }
 
 /// Presigned URL for a session's replay.
@@ -335,6 +385,12 @@ pub(crate) struct CreateSessionRequest {
     pub captcha: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxySpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u32>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub keep_alive: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_metadata: Option<Map<String, Value>>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -372,6 +428,8 @@ pub(crate) struct CreateSessionResponse {
     pub storage_state: Option<Option<StorageState>>,
     #[serde(default)]
     pub proxy: Option<ResolvedProxyConfig>,
+    #[serde(default)]
+    pub user_metadata: Option<Map<String, Value>>,
 }
 
 /// `GET /sessions/:id/replay-url`.
