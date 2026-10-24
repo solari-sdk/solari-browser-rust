@@ -208,6 +208,10 @@ impl HttpTransport {
             }
             if let Some(p) = &payload {
                 rb = rb.body(p.clone());
+            } else if matches!(method, "POST" | "PUT" | "PATCH") {
+                // reqwest sends NO Content-Length for a body-less POST and the hosted gateway's front end answers 411 Length
+                // Required (a default-options `sessions().create()` failed that way). Say "empty body" explicitly.
+                rb = rb.header("Content-Length", "0");
             }
 
             match rb.send().await {
