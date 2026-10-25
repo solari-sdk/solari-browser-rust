@@ -301,7 +301,7 @@ mod tests {
             .sessions()
             .create(
                 CreateSessionOptions::new()
-                    .timeout_seconds(120)
+                    .session_timeout_ms(120_000)
                     .keep_alive(true)
                     .user_metadata(meta),
             )
@@ -315,6 +315,63 @@ mod tests {
         assert_eq!(json["keepAlive"], true);
         assert_eq!(json["userMetadata"]["job"], "j-7");
         assert_eq!(session.user_metadata.unwrap()["job"], "j-7");
+    }
+
+    /// Session lifetime goes out as whole seconds, rounded up; the deprecated seconds option still works
+    /// and the millisecond one wins when both are set.
+    #[test]
+    fn session_timeout_ms_converts_to_wire_seconds() {
+        use crate::client::session_timeout_seconds as conv;
+        assert_eq!(conv(None, None).unwrap(), None);
+        assert_eq!(conv(Some(0), None).unwrap(), None);
+        assert_eq!(conv(Some(1000), None).unwrap(), Some(1));
+        assert_eq!(conv(Some(1001), None).unwrap(), Some(2));
+        assert_eq!(conv(Some(59_999), None).unwrap(), Some(60));
+        assert_eq!(conv(Some(60_000), None).unwrap(), Some(60));
+        assert_eq!(conv(None, Some(90)).unwrap(), Some(90));
+        assert_eq!(conv(None, Some(0)).unwrap(), None);
+        assert_eq!(conv(Some(120_000), Some(90)).unwrap(), Some(120), "the new name wins");
+        assert!(conv(Some(u64::MAX), None).is_err(), "too large for the wire field");
+    }
+
+    /// The wire field stays timeoutSeconds, and the new option's name is never sent.
+    #[tokio::test]
+    async fn session_timeout_ms_is_sent_as_timeout_seconds() {
+        let (l, port) = bind_mock().await;
+        let captured = serve(
+            l,
+            vec![(201, r#"{"sessionId":"s_1","wsEndpoint":"wss://gw.example.com/ws/s_1"}"#.to_string())],
+        );
+        client_for(port)
+            .sessions()
+            .create(CreateSessionOptions::new().session_timeout_ms(61_001))
+            .await
+            .unwrap();
+        let raw = captured.lock().unwrap()[0].clone();
+        let (_, body) = split_req(&raw);
+        let json: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(json["timeoutSeconds"], 62);
+        assert!(json.get("sessionTimeoutMs").is_none() && json.get("session_timeout_ms").is_none());
+    }
+
+    /// The deprecated builder method still sends its seconds.
+    #[allow(deprecated)]
+    #[tokio::test]
+    async fn deprecated_timeout_seconds_still_works() {
+        let (l, port) = bind_mock().await;
+        let captured = serve(
+            l,
+            vec![(201, r#"{"sessionId":"s_1","wsEndpoint":"wss://gw.example.com/ws/s_1"}"#.to_string())],
+        );
+        client_for(port)
+            .sessions()
+            .create(CreateSessionOptions::new().timeout_seconds(90))
+            .await
+            .unwrap();
+        let raw = captured.lock().unwrap()[0].clone();
+        let (_, body) = split_req(&raw);
+        let json: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(json["timeoutSeconds"], 90);
     }
 
     /// The new options add nothing to the body when unset: still no body at all.

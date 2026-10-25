@@ -60,7 +60,7 @@ With browser automation (pulls in `chromiumoxide`):
 
 ```toml
 [dependencies]
-solari-browser = { version = "0.4", features = ["connect"] }
+solari-browser = { version = "0.5", features = ["connect"] }
 ```
 
 ~~```toml
@@ -208,7 +208,7 @@ let mut meta = serde_json::Map::new();
 meta.insert("job".into(), serde_json::json!("nightly-42"));
 let session = client.sessions().create(
     CreateSessionOptions::new()
-        .timeout_seconds(600)   // end earlier than the plan maximum (at least 60)
+        .session_timeout_ms(600_000) // end earlier than the plan maximum, in ms (at least 60000)
         .keep_alive(true)       // hold the session if the client drops, until its deadline or release
         .user_metadata(meta),   // stored with the session
 ).await?;
@@ -219,6 +219,14 @@ opts.limit = Some(50);
 opts.metadata.insert("job".into(), "nightly-42".into()); // optional: match user_metadata
 let page = client.sessions().list(opts).await?;          // page.sessions, page.next_cursor
 ```
+
+All durations are milliseconds. `session_timeout_ms` is rounded up to whole seconds
+for the gateway (1001 ms is 2 s) and the gateway refuses anything under 60 s; zero or
+unset leaves the plan maximum. `LaunchOptions::probe_timeout_ms` bounds the launch probe.
+
+**Deprecated:** `CreateSessionOptions::timeout_seconds` (field and builder method)
+still works; use `session_timeout_ms`. When both are set the new one wins. It will not
+be removed before the next major release.
 
 `list` never returns the websocket endpoints (they are bearer capabilities): call
 `get` for a single session's. Pass `page.next_cursor` as `cursor` for the next

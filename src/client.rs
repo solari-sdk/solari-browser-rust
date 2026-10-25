@@ -110,11 +110,15 @@ pub struct CreateSessionOptions {
     pub captcha: bool,
     /// Request managed proxy egress. Requires `stealth`.
     pub proxy: Option<ProxySpec>,
-    /// End the session earlier than the plan maximum. `None` leaves the plan
-    /// maximum; the gateway refuses anything under 60.
+    /// End the session earlier than the plan maximum, in milliseconds. `None`
+    /// (or zero) leaves the plan maximum. The gateway counts whole seconds, so the
+    /// value is rounded up (1001 ms is 2 s), and it refuses anything under 60 s.
+    pub session_timeout_ms: Option<u64>,
+    /// The same limit in seconds.
+    #[deprecated(since = "0.5.0", note = "use `session_timeout_ms`; it wins when both are set")]
     pub timeout_seconds: Option<u32>,
     /// Hold the session after the client disconnects, until its deadline
-    /// (`timeout_seconds`, else an hour, never past the plan maximum) or until
+    /// (`session_timeout_ms`, else an hour, never past the plan maximum) or until
     /// it is released, so a dropped client can reconnect.
     pub keep_alive: bool,
     /// Free-form JSON stored with the session and returned by `get` and `list`.
@@ -151,6 +155,15 @@ impl CreateSessionOptions {
         self
     }
 
+    /// Session lifetime in milliseconds; see [`CreateSessionOptions::session_timeout_ms`].
+    pub fn session_timeout_ms(mut self, ms: u64) -> Self {
+        self.session_timeout_ms = Some(ms);
+        self
+    }
+
+    /// Session lifetime in seconds.
+    #[deprecated(since = "0.5.0", note = "use `session_timeout_ms`")]
+    #[allow(deprecated)]
     pub fn timeout_seconds(mut self, seconds: u32) -> Self {
         self.timeout_seconds = Some(seconds);
         self
@@ -247,7 +260,11 @@ impl Sessions<'_> {
             stealth: options.stealth,
             captcha: options.captcha,
             proxy: options.proxy.clone(),
-            timeout_seconds: options.timeout_seconds,
+            timeout_seconds: session_timeout_seconds(
+                options.session_timeout_ms,
+                #[allow(deprecated)]
+                options.timeout_seconds,
+            )?,
             keep_alive: options.keep_alive,
             user_metadata: options.user_metadata.clone(),
         };
@@ -597,6 +614,24 @@ fn metadata_filter(m: &BTreeMap<String, String>) -> Result<String, SolariError> 
         clauses.push(format!("user_metadata['{k}']:'{v}'"));
     }
     Ok(clauses.join(" AND "))
+}
+
+/// The wire value for the gateway's `timeoutSeconds`: the millisecond option
+/// rounded up to whole seconds, else the deprecated seconds option. `None` or zero
+/// means "omit". Refuses a value too large for the wire field.
+pub(crate) fn session_timeout_seconds(
+    ms: Option<u64>,
+    legacy_seconds: Option<u32>,
+) -> Result<Option<u32>, SolariError> {
+    match ms.filter(|m| *m > 0) {
+        Some(ms) => {
+            let secs = ms / 1000 + u64::from(ms % 1000 != 0);
+            u32::try_from(secs).map(Some).map_err(|_| {
+                SolariError::config("Solari: session_timeout_ms is too large")
+            })
+        }
+        None => Ok(legacy_seconds.filter(|s| *s > 0)),
+    }
 }
 
 /// Percent-encode a path segment. Session ids are HMAC composites (`.`-joined
