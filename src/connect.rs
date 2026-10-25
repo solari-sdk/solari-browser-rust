@@ -38,12 +38,16 @@ impl ConnectedBrowser {
         (self.browser, self.handler)
     }
 
-    /// Drop the browser (which ends the CDP connection) and await the handler.
+    /// Drop the browser, end the handler task (which closes the CDP connection) and wait for it.
     ///
     /// This does **not** release the Solari session — call
     /// [`crate::Sessions::release`] for that.
+    ///
+    /// The handler does not end on its own when the browser is dropped: it keeps pumping the open WebSocket, so awaiting it
+    /// without aborting it hung forever.
     pub async fn disconnect(self) {
         drop(self.browser);
+        self.handler.abort();
         let _ = self.handler.await;
     }
 }

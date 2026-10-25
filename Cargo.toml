@@ -16,7 +16,7 @@ path = "src/lib.rs"
 default = []
 # Opt-in browser automation: attach to a session's CDP endpoint via chromiumoxide.
 # Off by default so the control-plane surface stays dependency-light.
-connect = ["dep:chromiumoxide", "dep:futures-util", "tokio/rt"]
+connect = ["dep:chromiumoxide", "dep:futures-util", "dep:async-tungstenite", "tokio/rt"]
 
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -27,6 +27,10 @@ tokio = { version = "1", features = ["time"] }
 url = "2"
 
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"], optional = true }
+# chromiumoxide builds async-tungstenite WITHOUT TLS, so it cannot dial the hosted gateway's wss:// CDP endpoint ("URL error: TLS support not
+# compiled in"). Declaring it here with a rustls feature turns TLS on for chromiumoxide's copy too (Cargo unifies features); the version
+# must stay the one chromiumoxide 0.7 depends on.
+async-tungstenite = { version = "0.27", features = ["tokio-rustls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }
 
 [dev-dependencies]
