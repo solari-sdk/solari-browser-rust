@@ -190,6 +190,18 @@ impl HttpTransport {
         body: Option<&serde_json::Value>,
         idempotency_key: Option<&str>,
     ) -> Result<RawResponse, SolariError> {
+        self.request_full(method, path, body, idempotency_key, &[]).await
+    }
+
+    /// As [`Self::request_with_key`], plus extra request headers sent on every attempt.
+    pub async fn request_full(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        idempotency_key: Option<&str>,
+        headers: &[(&str, &str)],
+    ) -> Result<RawResponse, SolariError> {
         let m = Method::from_bytes(method.as_bytes())
             .map_err(|e| SolariError::config(format!("Solari: bad method {method}: {e}")))?;
         let url = format!("{}{}", self.base_url, path);
@@ -205,6 +217,9 @@ impl HttpTransport {
                 .header("Content-Type", "application/json");
             if let Some(k) = idempotency_key {
                 rb = rb.header("Idempotency-Key", k);
+            }
+            for (k, v) in headers {
+                rb = rb.header(*k, *v);
             }
             if let Some(p) = &payload {
                 rb = rb.body(p.clone());

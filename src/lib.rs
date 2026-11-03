@@ -54,6 +54,7 @@
 
 mod client;
 mod error;
+mod profile_editor;
 mod http;
 mod types;
 
@@ -66,6 +67,7 @@ mod session;
 pub use client::{
     Client, ClientOptions, CreateSessionOptions, ListSessionsOptions, Profiles, Proxy, Sessions,
 };
+pub use profile_editor::{EditorState, EditorStatus, ProfileEditor};
 pub use error::{ApiErrorBody, SolariError, SolariErrorCode};
 pub use types::{
     Cookie, LocalStorageEntry, Profile, ProfileSaveResult, ProxyCountries, ProxyRequest, ProxySpec,

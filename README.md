@@ -177,6 +177,26 @@ for p in client.profiles().list().await? {
 }
 ```
 
+### Editing a profile
+
+`profiles().edit` opens the profile editor on an existing profile and returns a
+`ProfileEditor`. Send the person to `editor.url`; it is valid for about 30
+minutes (`editor.expires_at`). There is no auto-save and no save without closing.
+
+```rust
+let editor = client.profiles().edit(&profile.id, Some("refresh login")).await?; // reason is optional
+println!("{} (start version {})", editor.url, editor.start_version);
+
+let st = editor.status().await?;                 // st.editor_status: Idle | Launching | Editing | Saving | Error
+let version = editor.save_and_close().await?;    // store the state and close the editor
+editor.exit().await?;                            // close without saving
+let version = editor.wait_for_save(Some(Duration::from_secs(600))).await?; // poll until someone saves from the page
+```
+
+Errors are `SolariError::Api`: an expired or used link has status 404, an editor
+that is not running 409, a failed save 502 (the editor stays open, so retry).
+`wait_for_save` fails with status 408 on timeout or link expiry.
+
 `storage_state` is three-state, mirroring the TS `storageState?: StorageState | null`:
 `None` = no profile attached, `Some(None)` = profile attached but empty,
 `Some(Some(_))` = the profile's state.

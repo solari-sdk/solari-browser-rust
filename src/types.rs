@@ -352,6 +352,9 @@ pub struct Profile {
     pub id: String,
     #[serde(default)]
     pub name: String,
+    /// Increases on every save. 0 when the gateway omits it.
+    #[serde(default)]
+    pub version: u64,
     /// Any additional keys the wire carried (TS index signature).
     #[serde(flatten)]
     pub extra: Map<String, Value>,
