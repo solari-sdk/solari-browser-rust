@@ -59,7 +59,7 @@ struct Handoff {
 /// stores the profile and ends the editor, [`exit`](Self::exit) ends it without saving.
 ///
 /// An expired or used link fails every call with an API error of status 404; an editor that is not running
-/// with 409; a failed save with 502 (the editor stays open, so retry).
+/// with 409; a failed save with 502 (the editor stays open; save and exit are never retried automatically, so call again).
 #[derive(Debug, Clone)]
 pub struct ProfileEditor {
     client: Client,
@@ -109,7 +109,12 @@ impl ProfileEditor {
         })
     }
 
-    async fn call(&self, method: &str, suffix: &str) -> Result<String, SolariError> {
+    async fn call(
+        &self,
+        method: &str,
+        suffix: &str,
+        no_retry: bool,
+    ) -> Result<String, SolariError> {
         let path = format!("/profiles/{}/editor{}", enc(&self.profile_id), suffix);
         let res = self
             .client
@@ -120,6 +125,7 @@ impl ProfileEditor {
                 None,
                 None,
                 &[("X-Handoff-Id", &self.handoff_id)],
+                no_retry,
             )
             .await?;
         if !res.ok() {
@@ -130,7 +136,7 @@ impl ProfileEditor {
 
     /// `GET /profiles/:id/editor`.
     pub async fn status(&self) -> Result<EditorState, SolariError> {
-        let body = self.call("GET", "").await?;
+        let body = self.call("GET", "", false).await?;
         serde_json::from_str(&body).map_err(|e| {
             SolariError::protocol(format!("Solari: unexpected editor status response: {e}"))
         })
@@ -139,7 +145,7 @@ impl ProfileEditor {
     /// `POST /profiles/:id/editor/save` — store the editor's browser state in the profile and close the
     /// editor. Returns the new version.
     pub async fn save_and_close(&self) -> Result<u64, SolariError> {
-        let body = self.call("POST", "/save").await?;
+        let body = self.call("POST", "/save", true).await?;
         #[derive(Deserialize)]
         struct Saved {
             version: Option<u64>,
@@ -152,7 +158,7 @@ impl ProfileEditor {
 
     /// `DELETE /profiles/:id/editor` — close the editor without saving.
     pub async fn exit(&self) -> Result<(), SolariError> {
-        self.call("DELETE", "").await.map(|_| ())
+        self.call("DELETE", "", true).await.map(|_| ())
     }
 
     /// Poll the profile list until this profile's version exceeds [`start_version`](Self::start_version)
@@ -252,7 +258,8 @@ mod tests {
 
     #[test]
     fn a_null_editor_status_is_idle() {
-        let st: EditorState = serde_json::from_str(r#"{"id":"p","editorStatus":null,"version":3}"#).unwrap();
+        let st: EditorState =
+            serde_json::from_str(r#"{"id":"p","editorStatus":null,"version":3}"#).unwrap();
         assert_eq!((st.editor_status, st.version), (EditorStatus::Idle, 3));
     }
 

@@ -117,9 +117,11 @@ async fn expired_not_running_and_failed_save_surface_their_status() {
         let ed = client.profiles().edit("prof_1", None).await.unwrap();
         let err = ed.save_and_close().await.unwrap_err();
         assert_eq!(err.status(), Some(status), "{err}");
-        if status != 502 {
-            assert_eq!(seen.lock().unwrap().len(), 2, "{status} is not retried");
-        }
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            2,
+            "{status}: a save is never replayed"
+        );
     }
 }
 

@@ -194,7 +194,7 @@ let version = editor.wait_for_save(Some(Duration::from_secs(600))).await?; // po
 ```
 
 Errors are `SolariError::Api`: an expired or used link has status 404, an editor
-that is not running 409, a failed save 502 (the editor stays open, so retry).
+that is not running 409, a failed save 502 (the editor stays open; save and exit are never retried automatically, so call again).
 `wait_for_save` fails with status 408 on timeout or link expiry.
 
 `storage_state` is three-state, mirroring the TS `storageState?: StorageState | null`:
