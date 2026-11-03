@@ -59,7 +59,7 @@ struct Handoff {
 /// stores the profile and ends the editor, [`exit`](Self::exit) ends it without saving.
 ///
 /// An expired or used link fails every call with an API error of status 404; an editor that is not running
-/// with 409; a failed save with 502 (the editor stays open; save and exit are never retried automatically, so call again).
+/// with 409; a failed save with 502 (the editor goes to error: `exit` and start a new `edit`; a second save gets 409). Save and exit are never retried automatically.
 #[derive(Debug, Clone)]
 pub struct ProfileEditor {
     client: Client,
