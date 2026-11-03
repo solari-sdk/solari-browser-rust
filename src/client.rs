@@ -14,6 +14,7 @@ use url::Url;
 
 use crate::error::{api_error, SolariError, SolariErrorCode};
 use crate::http::HttpTransport;
+use crate::profile_editor::ProfileEditor;
 use crate::types::{
     CreateSessionRequest, CreateSessionResponse, Profile, ProfileSaveResponse, ProfileSaveResult,
     ProxyCountries, ProxySpec, ReplayUrl, ReplayUrlResponse, Session, SessionList, SessionView,
@@ -195,7 +196,7 @@ pub struct ListSessionsOptions {
 /// Talks the Solari Browser control-plane REST API.
 #[derive(Debug, Clone)]
 pub struct Client {
-    http: HttpTransport,
+    pub(crate) http: HttpTransport,
 }
 
 impl Client {
@@ -537,6 +538,13 @@ impl Profiles<'_> {
         Ok(())
     }
 
+    /// `POST /profiles/:id/login-handoff` — open the profile editor on an existing profile.
+    /// Send the person to [`ProfileEditor::url`]; it is valid for about 30 minutes.
+    /// `reason` is optional free text. There is no auto-save and no save without closing.
+    pub async fn edit(&self, id: &str, reason: Option<&str>) -> Result<ProfileEditor, SolariError> {
+        ProfileEditor::open(self.client.clone(), id, reason).await
+    }
+
     /// `POST /profiles/:id/save` — persist a storage state onto the profile.
     pub async fn save(
         &self,
@@ -637,7 +645,7 @@ pub(crate) fn session_timeout_seconds(
 /// Percent-encode a path segment. Session ids are HMAC composites (`.`-joined
 /// base64url) and profile ids are opaque, so only a conservative set of
 /// unreserved characters is passed through.
-fn enc(s: &str) -> String {
+pub(crate) fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {

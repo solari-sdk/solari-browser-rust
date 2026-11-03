@@ -190,13 +190,28 @@ impl HttpTransport {
         body: Option<&serde_json::Value>,
         idempotency_key: Option<&str>,
     ) -> Result<RawResponse, SolariError> {
+        self.request_full(method, path, body, idempotency_key, &[], false).await
+    }
+
+    /// As [`Self::request_with_key`], plus extra request headers sent on every attempt.
+    /// `no_retry` makes the call single-shot: a 502 or a transport error is returned as-is.
+    pub async fn request_full(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        idempotency_key: Option<&str>,
+        headers: &[(&str, &str)],
+        no_retry: bool,
+    ) -> Result<RawResponse, SolariError> {
         let m = Method::from_bytes(method.as_bytes())
             .map_err(|e| SolariError::config(format!("Solari: bad method {method}: {e}")))?;
         let url = format!("{}{}", self.base_url, path);
         let payload = body.map(|b| serde_json::to_string(b).unwrap_or_else(|_| "null".into()));
 
         let mut last_err: Option<String> = None;
-        for attempt in 1..=self.max_attempts {
+        let max_attempts = if no_retry { 1 } else { self.max_attempts };
+        for attempt in 1..=max_attempts {
             let mut rb = self
                 .client
                 .request(m.clone(), &url)
@@ -205,6 +220,9 @@ impl HttpTransport {
                 .header("Content-Type", "application/json");
             if let Some(k) = idempotency_key {
                 rb = rb.header("Idempotency-Key", k);
+            }
+            for (k, v) in headers {
+                rb = rb.header(*k, *v);
             }
             if let Some(p) = &payload {
                 rb = rb.body(p.clone());
@@ -224,7 +242,7 @@ impl HttpTransport {
                             && says_retryable(&body));
                     // Out of attempts: hand the last response back so the caller maps its
                     // status and `code` like any other error, not a status-less Transport.
-                    if (200..300).contains(&status) || !retry_this || attempt == self.max_attempts {
+                    if (200..300).contains(&status) || !retry_this || attempt == max_attempts {
                         return Ok(RawResponse { status, body });
                     }
                     last_err = Some(format!("Solari {method} {path}: {status}"));
@@ -235,14 +253,14 @@ impl HttpTransport {
                 }
             }
 
-            if attempt < self.max_attempts {
+            if attempt < max_attempts {
                 tokio::time::sleep(self.backoff).await;
             }
         }
 
         Err(SolariError::transport(format!(
             "Solari {method} {path}: exhausted {} attempts{}",
-            self.max_attempts,
+            max_attempts,
             last_err.map(|e| format!(" ({e})")).unwrap_or_default(),
         )))
     }
