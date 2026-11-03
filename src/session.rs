@@ -56,7 +56,7 @@ pub struct LaunchOptions {
     /// Health-probe the browser after connecting. `None` (default) means
     /// "probe iff `retries > 0`", matching the TS SDK.
     pub probe: Option<bool>,
-    /// Per-attempt probe timeout. Default 2000ms.
+    /// Per-attempt probe timeout. Default 15000ms.
     pub probe_timeout_ms: u64,
 }
 
@@ -67,7 +67,7 @@ impl LaunchOptions {
             create,
             retries: 0,
             probe: None,
-            probe_timeout_ms: 2000,
+            probe_timeout_ms: 15_000,
         }
     }
     /// Retry the whole start up to `n` extra times on a transient failure.
@@ -80,7 +80,7 @@ impl LaunchOptions {
         self.probe = Some(on);
         self
     }
-    /// Per-attempt probe timeout in milliseconds (default 2000).
+    /// Per-attempt probe timeout in milliseconds (default 15000).
     pub fn probe_timeout_ms(mut self, ms: u64) -> Self {
         self.probe_timeout_ms = ms;
         self
@@ -310,6 +310,12 @@ mod tests {
 
     fn api(status: u16) -> SolariError {
         SolariError::Api { status, code: None, message: "x".into() }
+    }
+
+    #[test]
+    fn the_default_probe_timeout_allows_a_cold_slot() {
+        // 2 s failed healthy stealth launches on a cold pool slot; Go and C++ use the same 15 s bound.
+        assert_eq!(LaunchOptions::new(CreateSessionOptions::new()).probe_timeout_ms, 15_000);
     }
 
     #[test]
