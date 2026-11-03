@@ -247,7 +247,9 @@ pub struct ProxyCountries {
 // ---------------------------------------------------------------------------
 
 /// A live browser session.
-#[derive(Debug, Clone)]
+///
+/// `Debug` hides the path and query of the endpoints: they carry the session's credential.
+#[derive(Clone)]
 pub struct Session {
     pub id: String,
     /// Playwright wire-protocol endpoint (upstream, as returned by the API).
@@ -266,6 +268,20 @@ pub struct Session {
     pub proxy: Option<ResolvedProxyConfig>,
     /// Echo of the `user_metadata` sent at create; `None` when none was sent.
     pub user_metadata: Option<Map<String, Value>>,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("id", &"<redacted>")
+            .field("ws_endpoint", &crate::http::redact_url(&self.ws_endpoint))
+            .field("cdp_endpoint", &crate::http::redact_url(&self.cdp_endpoint))
+            .field("expires_at", &self.expires_at)
+            .field("storage_state", &self.storage_state)
+            .field("proxy", &self.proxy)
+            .field("user_metadata", &self.user_metadata)
+            .finish()
+    }
 }
 
 /// `GET /sessions/:id`. Fields the gateway adds later land in [`SessionView::extra`].

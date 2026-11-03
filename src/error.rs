@@ -159,6 +159,21 @@ pub(crate) fn api_error(method: &str, path: &str, status: u16, body: &str) -> So
     SolariError::Api {
         status,
         code,
-        message: format!("Solari {method} {path} failed: {status} {body}"),
+        message: format!(
+            "Solari {method} {} failed: {status} {body}",
+            crate::http::redact_path(path)
+        ),
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::api_error;
+
+    #[test]
+    fn an_api_error_does_not_print_the_session_id() {
+        let e = api_error("GET", "/sessions/pool:abc:org:123.IDSECRET", 404, "{}").to_string();
+        assert!(!e.contains("IDSECRET"), "{e}");
+        assert!(e.contains("/sessions/pool:abc…"), "{e}");
     }
 }

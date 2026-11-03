@@ -17,6 +17,7 @@ use futures_util::StreamExt;
 use tokio::task::JoinHandle;
 
 use crate::error::SolariError;
+use crate::http::{redact_url, scrub_url_from};
 use crate::types::Session;
 
 /// A browser attached to a Solari session.
@@ -87,7 +88,11 @@ pub async fn connect_endpoint(cdp_endpoint: &str) -> Result<ConnectedBrowser, So
         Browser::connect_with_config(cdp_endpoint.to_string(), HandlerConfig::default())
             .await
             .map_err(|e| SolariError::Connect {
-                message: format!("Solari: failed to connect to {cdp_endpoint}: {e}"),
+                message: format!(
+                    "Solari: failed to connect to {}: {}",
+                    redact_url(cdp_endpoint),
+                    scrub_url_from(&e.to_string(), cdp_endpoint)
+                ),
             })?;
 
     // Pump the handler; without this nothing on `browser` ever resolves.
