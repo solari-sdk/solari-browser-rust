@@ -14,6 +14,43 @@ use reqwest::Method;
 
 use crate::error::SolariError;
 
+/// `scheme://host[:port]/…` of a URL, for error messages and logs. A CDP endpoint, a signed
+/// replay URL and a preview URL carry their credential in the path or query, so those never
+/// go into an error. Anything that does not parse becomes `<url>`.
+pub(crate) fn redact_url(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(u) if u.host_str().is_some() => {
+            let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
+            format!(
+                "{}://{}{}/…",
+                u.scheme(),
+                u.host_str().unwrap_or_default(),
+                port
+            )
+        }
+        _ => "<url>".to_string(),
+    }
+}
+
+/// Remove every occurrence of `secret_url` from a lower-level error's text, then redact any
+/// other URL-looking token (the transport libraries print the URL they were given).
+pub(crate) fn scrub_url_from(text: &str, secret_url: &str) -> String {
+    let t = text.replace(secret_url, &redact_url(secret_url));
+    t.split_whitespace()
+        .map(|w| {
+            let core = w.trim_matches(|c: char| {
+                matches!(c, '(' | ')' | '"' | '\'' | ',' | ';' | ':' | '<' | '>')
+            });
+            if core.contains("://") && core != redact_url(core) {
+                w.replace(core, &redact_url(core))
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// A raw, already-buffered HTTP response. Non-2xx statuses are *not* errors at
 /// this layer — callers decide, exactly as the TS `request()` returns a
 /// `Response` regardless of `res.ok`.
@@ -278,7 +315,13 @@ impl HttpTransport {
             .timeout(timeout)
             .send()
             .await
-            .map_err(|e| SolariError::transport(format!("Solari: GET {url} failed: {e}")))?;
+            .map_err(|e| {
+                SolariError::transport(format!(
+                    "Solari: GET {} failed: {}",
+                    redact_url(url),
+                    scrub_url_from(&e.to_string(), url)
+                ))
+            })?;
         let status = resp.status().as_u16();
         let body = resp.text().await.unwrap_or_default();
         Ok(RawResponse { status, body })
@@ -292,24 +335,84 @@ impl HttpTransport {
             .timeout(self.timeout)
             .send()
             .await
-            .map_err(|e| SolariError::transport(format!("Solari: GET {url} failed: {e}")))?;
+            .map_err(|e| {
+                SolariError::transport(format!(
+                    "Solari: GET {} failed: {}",
+                    redact_url(url),
+                    scrub_url_from(&e.to_string(), url)
+                ))
+            })?;
         let status = resp.status().as_u16();
         let bytes = resp
             .bytes()
             .await
-            .map_err(|e| SolariError::transport(format!("Solari: reading {url} failed: {e}")))?;
+            .map_err(|e| {
+                SolariError::transport(format!(
+                    "Solari: reading {} failed: {}",
+                    redact_url(url),
+                    scrub_url_from(&e.to_string(), url)
+                ))
+            })?;
         Ok((status, bytes.to_vec()))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_retryable_status, is_safe_to_replay, is_terminal};
+    use super::{is_retryable_status, is_safe_to_replay, is_terminal, redact_url, scrub_url_from, HttpTransport};
+    use std::time::Duration;
 
     /// 507 is in the allowlist although this gateway emits none (censused
     /// 2026-09-22). Asserted so a "dead code" cleanup reddens a test rather
     /// than silently making correctness depend on which gateway build is
     /// reached.
+    #[test]
+    fn redact_url_keeps_scheme_host_and_port_only() {
+        assert_eq!(
+            redact_url("wss://api.getsolari.com/cdp/SECRETSESSION?token=abc"),
+            "wss://api.getsolari.com/…"
+        );
+        assert_eq!(
+            redact_url("ws://127.0.0.1:9222/devtools/browser/SECRET"),
+            "ws://127.0.0.1:9222/…"
+        );
+        assert_eq!(
+            redact_url("https://bucket.s3.amazonaws.com/replay.json?X-Amz-Signature=SECRET"),
+            "https://bucket.s3.amazonaws.com/…"
+        );
+        assert_eq!(redact_url("not a url SECRET"), "<url>");
+        assert_eq!(redact_url(""), "<url>");
+    }
+
+    #[test]
+    fn scrub_url_from_removes_the_secret_wherever_the_library_printed_it() {
+        let url = "wss://api.getsolari.com/cdp/SECRETSESSION";
+        let out = scrub_url_from(
+            &format!("IO error: connection refused (url: {url}) while dialling {url}."),
+            url,
+        );
+        assert!(!out.contains("SECRETSESSION"), "{out}");
+        assert!(out.contains("api.getsolari.com"), "{out}");
+        // A URL the library printed that is not the one we passed is cut too.
+        let out = scrub_url_from("redirected to https://other.example/path/SECRET2?x=1", url);
+        assert!(!out.contains("SECRET2"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_presigned_get_does_not_print_the_signed_url() {
+        let http = HttpTransport::new("slr_live_x".into(), "http://127.0.0.1:1".into(), 1, 1, 500)
+            .unwrap();
+        let url = "http://127.0.0.1:1/replay.json?X-Amz-Signature=SIGSECRET";
+        let err = http
+            .get_presigned(url, Duration::from_millis(500))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("SIGSECRET"), "{err}");
+        let err = http.get_presigned_bytes(url).await.unwrap_err().to_string();
+        assert!(!err.contains("SIGSECRET"), "{err}");
+    }
+
     #[test]
     fn retryable_status_includes_507() {
         for s in [502u16, 503, 504, 507] {
