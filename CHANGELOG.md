@@ -2,7 +2,7 @@
 
 ## 0.6.2
 
-- **Errors and `{:?}` output no longer print the session's credential URLs.** A failed `connect()` / `connect_endpoint()` used to put the full CDP endpoint (which carries the session's credential in its path) into the error text, and a failed replay download printed the signed URL. They now show `scheme://host/…` only, and `Session`'s `Debug` hides the session id and the endpoint paths.
+- **Errors and `{:?}` output no longer print the session's credential URLs.** A failed `connect()` / `connect_endpoint()` used to put the full CDP endpoint (which carries the session's credential in its path) into the error text, and a failed replay download printed the signed URL. They now show `scheme://host/…` only, and `Session`'s `Debug` hides the session id and the endpoint paths. The session id in `/sessions/<id>` (the credential inside those URLs) is cut to its first 8 characters in REST error messages too.
 
 ## 0.6.1
 

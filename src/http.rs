@@ -32,6 +32,34 @@ pub(crate) fn redact_url(url: &str) -> String {
     }
 }
 
+/// `path` with the session id in `/sessions/<id>` cut to its first 8 characters. The session id is
+/// the credential inside the ws/cdp URLs, so it does not belong in error text or logs.
+pub(crate) fn redact_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut after_sessions = false;
+    for (i, seg) in path.split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        if after_sessions && !seg.is_empty() {
+            let (head, rest) = match seg.find(['?', '#']) {
+                Some(at) => seg.split_at(at),
+                None => (seg, ""),
+            };
+            let keep: String = head.chars().take(8).collect();
+            out.push_str(&keep);
+            if head.chars().count() > 8 {
+                out.push('…');
+            }
+            out.push_str(rest);
+        } else {
+            out.push_str(seg);
+        }
+        after_sessions = seg == "sessions";
+    }
+    out
+}
+
 /// Remove every occurrence of `secret_url` from a lower-level error's text, then redact any
 /// other URL-looking token (the transport libraries print the URL they were given).
 pub(crate) fn scrub_url_from(text: &str, secret_url: &str) -> String {
@@ -282,11 +310,15 @@ impl HttpTransport {
                     if (200..300).contains(&status) || !retry_this || attempt == max_attempts {
                         return Ok(RawResponse { status, body });
                     }
-                    last_err = Some(format!("Solari {method} {path}: {status}"));
+                    last_err = Some(format!("Solari {method} {}: {status}", redact_path(path)));
                 }
                 Err(e) => {
                     // Every transport error is retryable (mirrors isRetryableError).
-                    last_err = Some(format!("Solari {method} {path}: {e}"));
+                    last_err = Some(format!(
+                        "Solari {method} {}: {}",
+                        redact_path(path),
+                        scrub_url_from(&e.to_string(), &url)
+                    ));
                 }
             }
 
@@ -296,7 +328,8 @@ impl HttpTransport {
         }
 
         Err(SolariError::transport(format!(
-            "Solari {method} {path}: exhausted {} attempts{}",
+            "Solari {method} {}: exhausted {} attempts{}",
+            redact_path(path),
             max_attempts,
             last_err.map(|e| format!(" ({e})")).unwrap_or_default(),
         )))
@@ -359,7 +392,7 @@ impl HttpTransport {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_retryable_status, is_safe_to_replay, is_terminal, redact_url, scrub_url_from, HttpTransport};
+    use super::{is_retryable_status, is_safe_to_replay, is_terminal, redact_path, redact_url, scrub_url_from, HttpTransport};
     use std::time::Duration;
 
     /// 507 is in the allowlist although this gateway emits none (censused
@@ -411,6 +444,23 @@ mod tests {
         assert!(!err.contains("SIGSECRET"), "{err}");
         let err = http.get_presigned_bytes(url).await.unwrap_err().to_string();
         assert!(!err.contains("SIGSECRET"), "{err}");
+    }
+
+    #[test]
+    fn redact_path_cuts_the_session_id() {
+        assert_eq!(redact_path("/sessions/pool:abc:org:123.SECRETSIGNATURE"), "/sessions/pool:abc…");
+        assert_eq!(redact_path("/sessions/pool:abc:org:123.SECRET/replay-url"), "/sessions/pool:abc…/replay-url");
+        assert_eq!(redact_path("/sessions/short"), "/sessions/short");
+        assert_eq!(redact_path("/sessions"), "/sessions");
+        assert_eq!(redact_path("/profiles/prof_123456789"), "/profiles/prof_123456789");
+    }
+
+    #[tokio::test]
+    async fn a_transport_failure_does_not_print_the_session_id() {
+        let http = HttpTransport::new("slr_live_x".into(), "http://127.0.0.1:1".into(), 1, 1, 500).unwrap();
+        let err = http.request("GET", "/sessions/pool:abc:org:123.IDSECRET", None).await.unwrap_err().to_string();
+        assert!(!err.contains("IDSECRET"), "{err}");
+        assert!(err.contains("/sessions/pool:abc…"), "{err}");
     }
 
     #[test]
