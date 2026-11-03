@@ -26,9 +26,21 @@ pub enum EditorStatus {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorState {
+    /// The gateway reports `null` before the editor page has been opened; that reads as `Idle`.
+    #[serde(default, deserialize_with = "status_or_idle")]
     pub editor_status: EditorStatus,
     #[serde(default)]
     pub version: u64,
+}
+
+impl Default for EditorStatus {
+    fn default() -> Self {
+        EditorStatus::Idle
+    }
+}
+
+fn status_or_idle<'de, D: serde::Deserializer<'de>>(d: D) -> Result<EditorStatus, D::Error> {
+    Ok(Option::<EditorStatus>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Deserialize)]
@@ -237,6 +249,12 @@ fn parse_expires_at(v: &Value) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_null_editor_status_is_idle() {
+        let st: EditorState = serde_json::from_str(r#"{"id":"p","editorStatus":null,"version":3}"#).unwrap();
+        assert_eq!((st.editor_status, st.version), (EditorStatus::Idle, 3));
+    }
 
     #[test]
     fn parses_iso_and_epoch_expiry() {
