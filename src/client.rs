@@ -626,19 +626,28 @@ fn metadata_filter(m: &BTreeMap<String, String>) -> Result<String, SolariError> 
 
 /// The wire value for the gateway's `timeoutSeconds`: the millisecond option
 /// rounded up to whole seconds, else the deprecated seconds option. `None` or zero
-/// means "omit". Refuses a value too large for the wire field.
+/// means "omit". Refuses a value whose seconds do not fit the wire field (int32, as
+/// in the Go SDK) before any request.
 pub(crate) fn session_timeout_seconds(
     ms: Option<u64>,
     legacy_seconds: Option<u32>,
 ) -> Result<Option<u32>, SolariError> {
+    const WIRE_MAX: u32 = i32::MAX as u32;
     match ms.filter(|m| *m > 0) {
         Some(ms) => {
             let secs = ms / 1000 + u64::from(ms % 1000 != 0);
-            u32::try_from(secs).map(Some).map_err(|_| {
-                SolariError::config("Solari: session_timeout_ms is too large")
-            })
+            u32::try_from(secs)
+                .ok()
+                .filter(|s| *s <= WIRE_MAX)
+                .map(Some)
+                .ok_or_else(|| SolariError::config("Solari: session_timeout_ms is too large"))
         }
-        None => Ok(legacy_seconds.filter(|s| *s > 0)),
+        None => match legacy_seconds.filter(|s| *s > 0) {
+            Some(s) if s > WIRE_MAX => {
+                Err(SolariError::config("Solari: timeout_seconds is too large"))
+            }
+            other => Ok(other),
+        },
     }
 }
 

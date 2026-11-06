@@ -334,6 +334,14 @@ mod tests {
         assert_eq!(conv(None, Some(0)).unwrap(), None);
         assert_eq!(conv(Some(120_000), Some(90)).unwrap(), Some(120), "the new name wins");
         assert!(conv(Some(u64::MAX), None).is_err(), "too large for the wire field");
+        // The wire field is int32 (the Go SDK enforces it too): the largest seconds that fit still go out,
+        // one more is refused, even though it fits a u32.
+        let max = i32::MAX as u64;
+        assert_eq!(conv(Some(max * 1000), None).unwrap(), Some(i32::MAX as u32));
+        assert!(conv(Some(max * 1000 + 1), None).is_err(), "int32 seconds + 1 is refused");
+        assert!(conv(Some((u32::MAX as u64) * 1000), None).is_err(), "fits u32, not int32");
+        assert_eq!(conv(None, Some(i32::MAX as u32)).unwrap(), Some(i32::MAX as u32));
+        assert!(conv(None, Some(i32::MAX as u32 + 1)).is_err(), "legacy seconds above int32 are refused too");
     }
 
     /// The wire field stays timeoutSeconds, and the new option's name is never sent.
