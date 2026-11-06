@@ -627,7 +627,7 @@ fn metadata_filter(m: &BTreeMap<String, String>) -> Result<String, SolariError> 
 /// The wire value for the gateway's `timeoutSeconds`: the millisecond option
 /// rounded up to whole seconds, else the deprecated seconds option. `None` or zero
 /// means "omit". Refuses a value whose seconds do not fit the wire field (int32, as
-/// as in the Go SDK) before any request.
+/// in the Go SDK) before any request.
 pub(crate) fn session_timeout_seconds(
     ms: Option<u64>,
     legacy_seconds: Option<u32>,
