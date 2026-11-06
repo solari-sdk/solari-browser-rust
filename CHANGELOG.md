@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.4
+- README only: the Install section no longer names an internal path and the dependency lines use the current version (crates.io and docs.rs showed the old `"0.2"`).
+
+## 0.6.3
+- A session timeout above 2147483647 seconds (`session_timeout_ms` or the deprecated `timeout_seconds`) is refused before any request, matching the Go SDK and the gateway's int32 field.
+
 ## 0.6.2
 
 - **Errors and `{:?}` output no longer print the session's credential URLs.** A failed `connect()` / `connect_endpoint()` used to put the full CDP endpoint (which carries the session's credential in its path) into the error text, and a failed replay download printed the signed URL. They now show `scheme://host/…` only, and `Session`'s `Debug` hides the session id and the endpoint paths. The session id in `/sessions/<id>` (the credential inside those URLs) is cut to its first 8 characters in REST error messages too.
