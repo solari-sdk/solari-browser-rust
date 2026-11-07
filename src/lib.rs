@@ -43,7 +43,7 @@
 //! Enable it with:
 //!
 //! ```toml
-//! solari-browser = { version = "0.2", features = ["connect"] }
+//! solari-browser = { version = "0.6", features = ["connect"] }
 //! ```
 //!
 //! ## Endpoints vs. the TypeScript SDK
