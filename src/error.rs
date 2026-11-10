@@ -285,6 +285,16 @@ mod redaction_tests {
     }
 
     #[test]
+    fn a_session_id_field_is_cut_even_when_the_path_carries_no_id() {
+        let body = format!(r#"{{"error":"busy","code":"Conflict","sessionId":"{ID}"}}"#);
+        let e = api_error("GET", "/profiles", 409, &body);
+        let text = e.to_string();
+        assert!(!text.contains("IDSECRET"), "{text}");
+        assert!(text.contains(r#""sessionId":"pool-abc…""#), "{text}");
+        assert_eq!(e.code().map(|c| c.to_string()), Some("Conflict".to_string()));
+    }
+
+    #[test]
     fn redact_body_leaves_short_ids_and_unrelated_text_alone() {
         assert_eq!(redact_body("/sessions/short", r#"{"x":"short"}"#), r#"{"x":"short"}"#);
         assert_eq!(redact_body("/profiles/abcdefghijkl", "abcdefghijkl"), "abcdefghijkl");
