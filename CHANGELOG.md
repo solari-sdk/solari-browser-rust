@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.5
+- **The gateway's error body no longer carries the session id into error messages.** `GET /sessions/<id>/replay-url` answered `404 ReplayPending` with the full `sessionId` in its body and `SolariError::Api` appended that body. The id is the credential inside the ws/cdp URLs. The body is now redacted (the request path's id, in any spelling, and every `"sessionId"` field cut to 8 characters); `code()` is still parsed from the raw body.
+- The dependency line in the crate docs (what docs.rs shows) said `version = "0.2"`, which does not exist as a fetchable release (HTTP 411 from the registry); it now says `"0.6"`, and a test keeps README.md and the crate docs in step with the crate version.
+
 ## 0.6.4
 - README only: the Install section no longer names an internal path and the dependency lines use the current version (crates.io and docs.rs showed the old `"0.2"`).
 

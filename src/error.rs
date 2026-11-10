@@ -147,6 +147,87 @@ pub struct ApiErrorBody {
     pub message: Option<String>,
 }
 
+/// `body` with the session id of `path` (`/sessions/<id>/…`), in any spelling, and every `"sessionId":"…"` field cut to their
+/// first 8 characters. The id is the credential inside the ws/cdp URLs and the gateway's error bodies used to echo it (the
+/// replay-url 404), so it must not reach an error message through the body either.
+pub(crate) fn redact_body(path: &str, body: &str) -> String {
+    fn short(id: &str) -> String {
+        let keep: String = id.chars().take(8).collect();
+        if id.chars().count() > 8 { format!("{keep}…") } else { keep }
+    }
+    let mut out = body.to_string();
+    let mut after_sessions = false;
+    for seg in path.split('/') {
+        if after_sessions && !seg.is_empty() {
+            let raw = seg.split(['?', '#']).next().unwrap_or(seg);
+            if raw.chars().count() > 8 {
+                let plain = percent_decode(raw);
+                for form in [raw.to_string(), percent_encode(&plain), plain.clone()] {
+                    out = out.replace(&form, &short(&plain));
+                }
+            }
+        }
+        after_sessions = seg == "sessions";
+    }
+    // "sessionId":"<value>" fields, whatever the id.
+    let key = "\"sessionId\"";
+    let mut res = String::with_capacity(out.len());
+    let mut rest = out.as_str();
+    while let Some(at) = rest.find(key) {
+        let (head, tail) = rest.split_at(at + key.len());
+        res.push_str(head);
+        let t = tail.trim_start();
+        let ws = tail.len() - t.len();
+        if let Some(t) = t.strip_prefix(':') {
+            let t2 = t.trim_start();
+            if let Some(v) = t2.strip_prefix('"') {
+                if let Some(end) = v.find('"') {
+                    res.push_str(&tail[..ws]);
+                    res.push(':');
+                    res.push_str(&t[..t.len() - t2.len()]);
+                    res.push('"');
+                    res.push_str(&short(&v[..end]));
+                    rest = &v[end..];
+                    continue;
+                }
+            }
+        }
+        rest = tail;
+    }
+    res.push_str(rest);
+    res
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.bytes() {
+        if c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b'~') {
+            out.push(c as char);
+        } else {
+            out.push_str(&format!("%{c:02X}"));
+        }
+    }
+    out
+}
+
 /// Build an [`SolariError::Api`] from a failed response, parsing `{code}` out of
 /// the body when it is JSON. `message` mirrors the TS format:
 /// `Solari <METHOD> <path> failed: <status> <body>`.
@@ -160,20 +241,52 @@ pub(crate) fn api_error(method: &str, path: &str, status: u16, body: &str) -> So
         status,
         code,
         message: format!(
-            "Solari {method} {} failed: {status} {body}",
-            crate::http::redact_path(path)
+            "Solari {method} {} failed: {status} {}",
+            crate::http::redact_path(path),
+            redact_body(path, body)
         ),
     }
 }
 
 #[cfg(test)]
 mod redaction_tests {
-    use super::api_error;
+    use super::{api_error, redact_body};
 
     #[test]
     fn an_api_error_does_not_print_the_session_id() {
         let e = api_error("GET", "/sessions/pool:abc:org:123.IDSECRET", 404, "{}").to_string();
         assert!(!e.contains("IDSECRET"), "{e}");
         assert!(e.contains("/sessions/pool:abc…"), "{e}");
+    }
+
+    const ID: &str = "pool-abc:org-123.IDSECRETSIGNATURE";
+
+    #[test]
+    fn a_body_that_echoes_the_session_id_is_cut() {
+        let path = format!("/sessions/{ID}/replay-url");
+        for body in [
+            format!(r#"{{"error":"Replay not ready yet","code":"ReplayPending","retryable":true,"sessionId":"{ID}"}}"#),
+            format!(r#"{{"error":"no session {ID} here"}}"#),
+            r#"{"error":"no session pool-abc%3Aorg-123.IDSECRETSIGNATURE here"}"#.to_string(),
+            format!(r#"{{ "sessionId" : "{ID}" }}"#),
+        ] {
+            let e = api_error("GET", &path, 404, &body);
+            let text = e.to_string();
+            assert!(!text.contains("IDSECRET"), "{text}");
+            assert_eq!(e.status(), Some(404));
+        }
+    }
+
+    #[test]
+    fn the_code_is_still_parsed_from_the_raw_body() {
+        let body = format!(r#"{{"code":"ReplayPending","sessionId":"{ID}"}}"#);
+        let e = api_error("GET", &format!("/sessions/{ID}/replay-url"), 404, &body);
+        assert_eq!(e.code().map(|c| c.to_string()), Some("ReplayPending".to_string()));
+    }
+
+    #[test]
+    fn redact_body_leaves_short_ids_and_unrelated_text_alone() {
+        assert_eq!(redact_body("/sessions/short", r#"{"x":"short"}"#), r#"{"x":"short"}"#);
+        assert_eq!(redact_body("/profiles/abcdefghijkl", "abcdefghijkl"), "abcdefghijkl");
     }
 }
