@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.6
+- **`connect` / `connect_endpoint`: a WebSocket handshake with no answer now fails at a bound instead of waiting for ever (hardening).** chromiumoxide has no dial timeout, so when the gateway accepted the connection but never completed the upgrade the call waited for ever unless you wrapped it. The handshake is now bounded by `DEFAULT_DIAL_TIMEOUT` (30 s); the `SolariError::Connect` message says "no WebSocket handshake answer within 30000ms". `connect_endpoint_timeout(endpoint, d)` sets another bound. It covers only the handshake: give every later call on the browser your own `tokio::time::timeout`.
+
 ## 0.6.5
 - **The gateway's error body no longer carries the session id into error messages.** `GET /sessions/<id>/replay-url` answered `404 ReplayPending` with the full `sessionId` in its body and `SolariError::Api` appended that body. The id is the credential inside the ws/cdp URLs. The body is now redacted (the request path's id, in any spelling, and every `"sessionId"` field cut to 8 characters); `code()` is still parsed from the raw body.
 - The dependency line in the crate docs (what docs.rs shows) said `version = "0.2"`, which does not exist as a fetchable release (HTTP 411 from the registry); it now says `"0.6"`, and a test keeps README.md and the crate docs in step with the crate version.

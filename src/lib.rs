@@ -77,7 +77,7 @@ pub use types::{
 };
 
 #[cfg(feature = "connect")]
-pub use connect::{connect, connect_endpoint, ConnectedBrowser};
+pub use connect::{connect, connect_endpoint, connect_endpoint_timeout, ConnectedBrowser, DEFAULT_DIAL_TIMEOUT};
 
 #[cfg(feature = "connect")]
 pub use session::{LaunchOptions, LaunchedSession};

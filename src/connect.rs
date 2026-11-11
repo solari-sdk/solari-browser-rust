@@ -84,16 +84,42 @@ pub async fn connect(session: &Session) -> Result<ConnectedBrowser, SolariError>
 /// Attach to an explicit CDP endpoint. Useful when you persisted a session's
 /// `cdp_endpoint` and no longer hold the [`Session`].
 pub async fn connect_endpoint(cdp_endpoint: &str) -> Result<ConnectedBrowser, SolariError> {
-    let (browser, mut handler) =
-        Browser::connect_with_config(cdp_endpoint.to_string(), HandlerConfig::default())
-            .await
-            .map_err(|e| SolariError::Connect {
+    connect_endpoint_timeout(cdp_endpoint, DEFAULT_DIAL_TIMEOUT).await
+}
+
+/// How long [`connect`] / [`connect_endpoint`] wait for the WebSocket handshake. The dial has no bound of its own in
+/// chromiumoxide, so a gateway that accepts the connection and never completes the upgrade used to make the call wait for
+/// ever. This bounds only the handshake: give every later call on the browser your own `tokio::time::timeout`.
+pub const DEFAULT_DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// [`connect_endpoint`] with an explicit bound on the WebSocket handshake. A handshake with no answer inside `dial_timeout` is a
+/// [`SolariError::Connect`] that says so.
+pub async fn connect_endpoint_timeout(
+    cdp_endpoint: &str,
+    dial_timeout: std::time::Duration,
+) -> Result<ConnectedBrowser, SolariError> {
+    let dial = Browser::connect_with_config(cdp_endpoint.to_string(), HandlerConfig::default());
+    let (browser, mut handler) = match tokio::time::timeout(dial_timeout, dial).await {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(e)) => {
+            return Err(SolariError::Connect {
                 message: format!(
                     "Solari: failed to connect to {}: {}",
                     redact_url(cdp_endpoint),
                     scrub_url_from(&e.to_string(), cdp_endpoint)
                 ),
-            })?;
+            })
+        }
+        Err(_) => {
+            return Err(SolariError::Connect {
+                message: format!(
+                    "Solari: failed to connect to {}: no WebSocket handshake answer within {}ms (the gateway accepted the connection but did not complete the upgrade); retry, or raise the bound with connect_endpoint_timeout",
+                    redact_url(cdp_endpoint),
+                    dial_timeout.as_millis()
+                ),
+            })
+        }
+    };
 
     // Pump the handler; without this nothing on `browser` ever resolves.
     let handle = tokio::spawn(async move { while handler.next().await.is_some() {} });

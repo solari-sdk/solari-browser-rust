@@ -78,3 +78,48 @@ async fn a_default_create_sends_content_length_zero() {
     assert!(head.starts_with("post /sessions "), "{head}");
     assert!(head.lines().any(|l| l.trim() == "content-length: 0"), "a body-less POST must carry content-length: 0, got:\n{head}");
 }
+
+#[tokio::test]
+async fn a_handshake_with_no_answer_fails_at_the_bound() {
+    // A gateway that accepts the TCP connection and the upgrade request and never answers it. chromiumoxide has no dial timeout, so
+    // connect_endpoint used to wait for ever (the 8-minute hang of the 2026-11-11 release-gate run, seen in browser-go).
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            held.push(sock); // open, never answered
+        }
+    });
+    let start = std::time::Instant::now();
+    // The guard: without the bound the call below runs into it instead of hanging the suite.
+    let res = tokio::time::timeout(
+        Duration::from_secs(6),
+        solari_browser::connect_endpoint_timeout(
+            &format!("ws://127.0.0.1:{port}/cdp/SECRET-SESSION-ID"),
+            Duration::from_millis(300),
+        ),
+    )
+    .await
+    .expect("connect_endpoint_timeout must fail at its own bound, not wait for the caller");
+    let err = match res {
+        Ok(_) => panic!("a gateway that never answers cannot complete a handshake"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "took {:?}",
+        start.elapsed()
+    );
+    assert!(
+        err.contains("no WebSocket handshake answer within 300ms"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("SECRET-SESSION-ID"),
+        "the session id leaked: {err}"
+    );
+}
