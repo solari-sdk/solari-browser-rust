@@ -84,8 +84,13 @@ pub async fn connect(session: &Session) -> Result<ConnectedBrowser, SolariError>
 /// Attach to an explicit CDP endpoint. Useful when you persisted a session's
 /// `cdp_endpoint` and no longer hold the [`Session`].
 pub async fn connect_endpoint(cdp_endpoint: &str) -> Result<ConnectedBrowser, SolariError> {
-    connect_endpoint_timeout(cdp_endpoint, DEFAULT_DIAL_TIMEOUT).await
+    let ms = DEFAULT_DIAL_MS.load(std::sync::atomic::Ordering::Relaxed);
+    connect_endpoint_timeout(cdp_endpoint, std::time::Duration::from_millis(ms)).await
 }
+
+/// What [`connect_endpoint`] (and so [`connect`]) uses, in ms. An atomic only so a unit test can lower it.
+static DEFAULT_DIAL_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(DEFAULT_DIAL_TIMEOUT.as_millis() as u64);
 
 /// How long [`connect`] / [`connect_endpoint`] wait for the WebSocket handshake. The dial has no bound of its own in
 /// chromiumoxide, so a gateway that accepts the connection and never completes the upgrade used to make the call wait for
@@ -128,4 +133,55 @@ pub async fn connect_endpoint_timeout(
         browser,
         handler: handle,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+    use tokio::net::TcpListener;
+
+    #[test]
+    fn the_shipped_default_is_30_seconds_and_is_what_connect_endpoint_reads() {
+        assert_eq!(DEFAULT_DIAL_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(DEFAULT_DIAL_MS.load(Ordering::Relaxed), 30_000);
+    }
+
+    // connect / connect_endpoint are the calls users make: they must carry the default bound (lowered here for the test).
+    #[tokio::test]
+    async fn connect_endpoint_and_connect_use_the_default_bound() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let Ok((sock, _)) = listener.accept().await else { return };
+                held.push(sock); // open, never answered
+            }
+        });
+        DEFAULT_DIAL_MS.store(300, Ordering::Relaxed);
+        let url = format!("ws://127.0.0.1:{port}/cdp/SECRET-SESSION-ID");
+        let start = Instant::now();
+        let a = tokio::time::timeout(Duration::from_secs(6), connect_endpoint(&url)).await;
+        let session = Session {
+            id: "s".into(),
+            ws_endpoint: "wss://x/ws/s".into(),
+            cdp_endpoint: url.clone(),
+            expires_at: String::new(),
+            storage_state: None,
+            proxy: None,
+            user_metadata: None,
+        };
+        let b = tokio::time::timeout(Duration::from_secs(6), connect(&session)).await;
+        DEFAULT_DIAL_MS.store(DEFAULT_DIAL_TIMEOUT.as_millis() as u64, Ordering::Relaxed);
+        for (name, r) in [("connect_endpoint", a), ("connect", b)] {
+            let err = match r.unwrap_or_else(|_| panic!("{name} waited for the caller instead of the default bound")) {
+                Ok(_) => panic!("{name}: a gateway that never answers cannot complete a handshake"),
+                Err(e) => e.to_string(),
+            };
+            assert!(err.contains("no WebSocket handshake answer within 300ms"), "{name}: {err}");
+        }
+        assert!(start.elapsed() < Duration::from_secs(4), "took {:?}", start.elapsed());
+    }
 }

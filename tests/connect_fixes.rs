@@ -123,3 +123,35 @@ async fn a_handshake_with_no_answer_fails_at_the_bound() {
         "the session id leaked: {err}"
     );
 }
+
+#[tokio::test]
+async fn an_ordinary_dial_failure_does_not_carry_the_session_id() {
+    // A port nothing listens on, and a gateway that answers the upgrade with 403: neither error may quote the endpoint, whose path
+    // is the session credential.
+    let closed = {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let forbidden = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fport = forbidden.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = forbidden.accept().await else { return };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .await;
+            });
+        }
+    });
+    for (what, port) in [("closed port", closed), ("HTTP 403", fport)] {
+        let err = match connect_endpoint(&format!("ws://127.0.0.1:{port}/cdp/SECRET-SESSION-ID")).await {
+            Ok(_) => panic!("{what}: cannot connect"),
+            Err(e) => e.to_string(),
+        };
+        assert!(!err.contains("SECRET-SESSION-ID"), "{what}: the session id leaked: {err}");
+        assert!(err.contains("failed to connect"), "{what}: {err}");
+    }
+}
