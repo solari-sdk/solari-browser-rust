@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.7
+- **`Profile::size_bytes`.** The gateway returns each profile's `sizeBytes` as a JSON number, but `Profile` did not declare it, so `profiles().list()` / `create()` left it in `extra` (retest D-25). It is now `size_bytes: Option<u64>`, `None` for a profile that has not been saved yet, as `Profile.sizeBytes` in TypeScript (and `SizeBytes` in Go). It is no longer in `extra`. Code that builds a `Profile` with a struct literal must add the field.
+- **The `ProxyOptions::session` doc said "alnum + dash, <=32 chars".** The gateway accepts any label of 1 to 128 characters and turns it into a stable id for the proxy vendor; the doc now says so.
+
 ## 0.6.6
 - **`connect` / `connect_endpoint`: a WebSocket handshake with no answer now fails at a bound instead of waiting for ever (hardening).** chromiumoxide has no dial timeout, so when the gateway accepted the connection but never completed the upgrade the call waited for ever unless you wrapped it. The handshake is now bounded by `DEFAULT_DIAL_TIMEOUT` (30 s); the `SolariError::Connect` message says "no WebSocket handshake answer within 30000ms". `connect_endpoint_timeout(endpoint, d)` sets another bound. It covers only the handshake: give every later call on the browser your own `tokio::time::timeout`.
 
