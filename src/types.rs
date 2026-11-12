@@ -116,8 +116,8 @@ pub struct ProxyRequest {
     /// Pin egress to a specific ASN (e.g. `"20057"` for AT&T Mobility).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asn: Option<String>,
-    /// Sticky-session id (alnum + dash, <=32 chars). Pins the egress IP for
-    /// `session_duration` minutes.
+    /// Sticky-session label: any 1-128 characters (the gateway turns it into a stable id for the proxy vendor). The same label
+    /// gets the same egress IP for `session_duration` minutes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     /// Sticky lifetime in minutes (1-30, default 10). Only with `session`.
@@ -371,6 +371,10 @@ pub struct Profile {
     /// Increases on every save. 0 when the gateway omits it.
     #[serde(default)]
     pub version: u64,
+    /// Size of the saved storage state in bytes (a JSON number on the wire). `None` for a profile that has not been saved yet.
+    /// The TypeScript `Profile.sizeBytes`; it used to be reachable only through `extra`.
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
     /// Any additional keys the wire carried (TS index signature).
     #[serde(flatten)]
     pub extra: Map<String, Value>,

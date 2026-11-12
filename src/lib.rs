@@ -863,7 +863,7 @@ mod tests {
     #[tokio::test]
     async fn profiles_list_parses() {
         let (l, port) = bind_mock().await;
-        let body = r#"[{"id":"p_1","name":"amazon","createdAt":"2026-01-01T00:00:00Z"},{"id":"p_2","name":"gmail"}]"#;
+        let body = r#"[{"id":"p_1","name":"amazon","createdAt":"2026-01-01T00:00:00Z","sizeBytes":4096},{"id":"p_2","name":"gmail"}]"#;
         let captured = serve(l, vec![(200, body.to_string())]);
 
         let client = client_for(port);
@@ -877,6 +877,10 @@ mod tests {
             profiles[0].extra.get("createdAt").unwrap(),
             "2026-01-01T00:00:00Z"
         );
+        // sizeBytes is a typed field (retest D-25), not left in `extra`; None until the profile is saved.
+        assert_eq!(profiles[0].size_bytes, Some(4096));
+        assert!(!profiles[0].extra.contains_key("sizeBytes"), "sizeBytes must be typed, not in extra");
+        assert_eq!(profiles[1].size_bytes, None);
         assert_eq!(profiles[1].id, "p_2");
         assert!(profiles[1].extra.is_empty());
 
