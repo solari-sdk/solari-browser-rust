@@ -10,8 +10,13 @@ use tokio::net::TcpListener;
 
 type Seen = Arc<Mutex<Vec<(Instant, String)>>>;
 
-/// First request: 503 NoCapacity (with `retry_after` when given); later requests: 200.
+/// First request: 503 NoCapacity (with `retry_after` when given); later requests: 200. With `drop_second`, the SECOND request is
+/// answered by closing the connection without a reply (a transport error), and the third succeeds.
 async fn gateway(retry_after: Option<&'static str>) -> (Client, Seen) {
+    gateway_with(retry_after, false, 2).await
+}
+
+async fn gateway_with(retry_after: Option<&'static str>, drop_second: bool, max_attempts: u32) -> (Client, Seen) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let seen: Seen = Arc::new(Mutex::new(Vec::new()));
@@ -27,11 +32,14 @@ async fn gateway(retry_after: Option<&'static str>) -> (Client, Seen) {
                 let n = sock.read(&mut buf).await.unwrap_or(0);
                 let head = String::from_utf8_lossy(&buf[..n]).to_lowercase();
                 let key = head.lines().find(|l| l.starts_with("idempotency-key:")).unwrap_or("").to_string();
-                let first = {
+                let (first, count) = {
                     let mut g = s2.lock().unwrap();
                     g.push((Instant::now(), key));
-                    g.len() == 1
+                    (g.len() == 1, g.len())
                 };
+                if drop_second && count == 2 {
+                    return; // close without a reply
+                }
                 let (status, extra, body) = if first {
                     (503, retry_after.map(|v| format!("Retry-After: {v}\r\n")).unwrap_or_default(), r#"{"error":"no capacity","code":"NoCapacity"}"#)
                 } else {
@@ -47,6 +55,7 @@ async fn gateway(retry_after: Option<&'static str>) -> (Client, Seen) {
     });
     let mut opts = ClientOptions::new("slr_test_x", format!("http://127.0.0.1:{port}"));
     opts.backoff_ms = 10;
+    opts.max_attempts = max_attempts;
     (Client::new(opts).unwrap(), seen)
 }
 
@@ -72,4 +81,15 @@ async fn a_503_without_retry_after_keeps_the_backoff() {
     client.sessions().create(Default::default()).await.unwrap();
     let (_, d) = gap(&seen);
     assert!(d < Duration::from_millis(800), "no Retry-After: the retry came after {d:?}");
+}
+
+#[tokio::test]
+async fn the_delay_does_not_stick_after_a_transport_error() {
+    let (client, seen) = gateway_with(Some("1"), true, 3).await;
+    client.sessions().create(Default::default()).await.unwrap();
+    let g = seen.lock().unwrap();
+    assert_eq!(g.len(), 3);
+    assert!(g[1].0 - g[0].0 >= Duration::from_millis(900), "the 503's Retry-After was honoured");
+    let second = g[2].0 - g[1].0;
+    assert!(second < Duration::from_millis(800), "after the connection error the wait was {second:?}: the plain backoff, not the old Retry-After");
 }
