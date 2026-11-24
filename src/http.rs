@@ -94,6 +94,23 @@ impl RawResponse {
     }
 }
 
+/// The longest the client waits because a response said `Retry-After`. A jail kind with no capacity answers `503 NoCapacity` with
+/// `Retry-After: 10` (PARITY B17); an absurd value must not park a caller for minutes.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
+
+/// Delay before the next attempt: the response's `Retry-After` (whole seconds, at least the backoff, at most [`MAX_RETRY_AFTER`])
+/// when it has a usable one, else `backoff`. Only the delta-seconds form is read; an HTTP-date (which the TS/Python/Go SDKs also
+/// accept) falls back to the backoff here, to avoid a date-parsing dependency. The gateway sends seconds.
+pub(crate) fn retry_after_delay(header: Option<&str>, backoff: Duration) -> Duration {
+    let Some(h) = header.map(str::trim).filter(|h| !h.is_empty()) else {
+        return backoff;
+    };
+    match h.parse::<u32>() {
+        Ok(secs) => Duration::from_secs(u64::from(secs)).clamp(backoff.min(MAX_RETRY_AFTER), MAX_RETRY_AFTER),
+        Err(_) => backoff,
+    }
+}
+
 /// Only 502/503/504 are worth another attempt.
 // Spelled as three distinct statuses rather than the equivalent `502..=504`
 // to mirror the reference `isRetryableStatus` — this is an allowlist of
@@ -275,6 +292,7 @@ impl HttpTransport {
         let payload = body.map(|b| serde_json::to_string(b).unwrap_or_else(|_| "null".into()));
 
         let mut last_err: Option<String> = None;
+        let mut delay: Duration;
         let max_attempts = if no_retry { 1 } else { self.max_attempts };
         for attempt in 1..=max_attempts {
             let mut rb = self
@@ -300,6 +318,11 @@ impl HttpTransport {
             match rb.send().await {
                 Ok(resp) => {
                     let status = resp.status().as_u16();
+                    let retry_after = resp
+                        .headers()
+                        .get("retry-after")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_owned);
                     let body = resp.text().await.unwrap_or_default();
                     // Success, or a status we must not retry: hand it back.
                     let retry_this = (is_retryable_status(status) && !is_terminal(status, &body))
@@ -310,9 +333,12 @@ impl HttpTransport {
                     if (200..300).contains(&status) || !retry_this || attempt == max_attempts {
                         return Ok(RawResponse { status, body });
                     }
+                    // A 503 NoCapacity says when to come back (Retry-After: 10): wait that long, not the short fixed backoff.
+                    delay = retry_after_delay(retry_after.as_deref(), self.backoff);
                     last_err = Some(format!("Solari {method} {}: {status}", redact_path(path)));
                 }
                 Err(e) => {
+                    delay = self.backoff;
                     // Every transport error is retryable (mirrors isRetryableError).
                     last_err = Some(format!(
                         "Solari {method} {}: {}",
@@ -323,7 +349,7 @@ impl HttpTransport {
             }
 
             if attempt < max_attempts {
-                tokio::time::sleep(self.backoff).await;
+                tokio::time::sleep(delay).await;
             }
         }
 
@@ -494,5 +520,22 @@ mod tests {
         assert!(!is_safe_to_replay("POST", None));
         assert!(is_safe_to_replay("POST", Some("k")));
         assert!(is_safe_to_replay("GET", None));
+    }
+}
+
+#[cfg(test)]
+mod retry_after_tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_delay_reads_seconds_and_falls_back_on_anything_unusable() {
+        let backoff = Duration::from_millis(500);
+        assert_eq!(retry_after_delay(Some("10"), backoff), Duration::from_secs(10));
+        assert_eq!(retry_after_delay(Some(" 3 "), backoff), Duration::from_secs(3));
+        assert_eq!(retry_after_delay(Some("0"), backoff), backoff);
+        assert_eq!(retry_after_delay(Some("3600"), backoff), MAX_RETRY_AFTER);
+        for bad in [None, Some(""), Some("soon"), Some("-5"), Some("1.5"), Some("Wed, 21 Oct 2015 07:28:00 GMT")] {
+            assert_eq!(retry_after_delay(bad, backoff), backoff, "{bad:?}");
+        }
     }
 }
